@@ -76,6 +76,20 @@ An AI-powered multilingual marketplace that:
 
 ## Architecture
 
+### Current Implementation
+**Current**: `Farmer → Voice → Transcribe → Bedrock → FastAPI → SQLite`
+
+**Target**: `Farmer → Voice → Transcribe → Bedrock → Lambda → DynamoDB → RDS → SNS`
+
+### AWS Services Used
+
+- **S3**: Voice file storage
+- **Transcribe**: Voice to text conversion
+- **Bedrock**: AI intent extraction (Claude 3 Haiku)
+- **Polly**: Text to speech recommendations
+
+### System Architecture Diagram
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Frontend (PWA)                           │
@@ -142,6 +156,9 @@ source venv/bin/activate  # Linux/Mac
 3. **Install dependencies**
 ```bash
 pip install -r requirements.txt
+
+# Install additional packages for local development
+pip install sounddevice soundfile numpy
 ```
 
 4. **Configure environment variables**
@@ -169,13 +186,24 @@ The API will be available at `http://localhost:8000`
 ### Environment Variables
 
 ```env
-# Database
-DATABASE_URL=postgresql://postgres:password@localhost:5432/farmfreeze
-
 # AWS Configuration
+AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=your_access_key
 AWS_SECRET_ACCESS_KEY=your_secret_key
-AWS_REGION=us-east-1
+
+# Bedrock Model
+BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+
+# S3 Bucket
+S3_BUCKET_NAME=your-voice-bucket
+
+# Database
+DATABASE_URL=sqlite:///./farmfreeze.db
+SECRET_KEY=your-secret-key
+DEBUG=True
+
+# AWS Configuration (Alternative PostgreSQL setup)
+# DATABASE_URL=postgresql://postgres:password@localhost:5432/farmfreeze
 
 # AI Services
 BEDROCK_MODEL_ID=anthropic.claude-v2
@@ -184,6 +212,13 @@ BEDROCK_MODEL_ID=anthropic.claude-v2
 DEBUG=true
 SECRET_KEY=your-secret-key
 ```
+
+### AWS Account Setup
+
+1. **Add Payment Method**: AWS Console → Billing → Payment Methods
+2. **Enable Bedrock**: AWS Console → Bedrock → Model Access → Request Claude 3 Haiku
+3. **Create S3 Bucket**: Create bucket in us-east-1 region
+4. **IAM Permissions**: Ensure user has S3, Transcribe, Bedrock, Polly access
 
 ## API Documentation
 
@@ -221,6 +256,14 @@ SECRET_KEY=your-secret-key
 | GET | `/api/v1/bookings/reference/{ref}` | Get by reference |
 | PUT | `/api/v1/bookings/{id}/cancel` | Cancel booking |
 | GET | `/api/v1/bookings/farmer/{id}` | Get farmer bookings |
+
+#### Voice Endpoints (Enhanced)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/voice/enhanced-book` | Complete voice booking with S3 storage |
+| GET | `/api/voice/stored-inputs` | List stored voice inputs |
+| POST | `/api/voice/transcribe` | Voice transcription only |
+| POST | `/api/voice/recommendation-audio` | Generate voice recommendations |
 
 #### AI Recommendations
 | Method | Endpoint | Description |
@@ -269,6 +312,18 @@ curl -X POST "http://localhost:8000/api/v1/ai/recommend" \
     "crop": "tomato"
   }'
 ```
+
+### Voice Input Examples
+
+- Hindi: "मुझे 100 किलो टमाटर स्टोर करना है कल से"
+- English: "I need to store 50 kg potatoes from tomorrow"
+- Incomplete: "मुझे स्टोरेज चाहिए" (gets recommendations)
+
+### Current Implementation Status
+
+✅ **Working**: Voice recording, S3 storage, Polly voice, Basic booking
+❌ **Needs Setup**: Bedrock payment method
+🚀 **Future**: Complete serverless architecture with Lambda, DynamoDB, RDS, SNS
 
 ## AI Components
 

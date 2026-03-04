@@ -1,7 +1,7 @@
 """
 FarmFreeze Connect - Cold Storage Booking System
 """
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date, timedelta
@@ -9,11 +9,19 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Date, Fore
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 from math import radians, sin, cos, sqrt, atan2
 import uuid
-
+from .ai_service import extract_farmer_intent
+from .voice_service import voice_service
 # ============ Database Setup ============
-DATABASE_URL = "postgresql://postgres:Anjali08*@localhost:5432/farmfreeze"
+import os
+from dotenv import load_dotenv
 
-engine = create_engine(DATABASE_URL)
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./farmfreeze.db")
+
+# SQLite requires check_same_thread=False
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -182,6 +190,148 @@ class SearchResponse(BaseModel):
     count: int
     search_params: dict
     storages: List[StorageSearchResult]
+
+class AIQueryRequest(BaseModel):
+    """Request for AI-powered natural language query"""
+    farmer_query: str
+    farmer_lat: float
+    farmer_lng: float
+    farmer_name: Optional[str] = None
+    farmer_phone: Optional[str] = None
+
+class AIQueryResponse(BaseModel):
+    """Response from AI-powered query"""
+    intent: dict
+    available_storages: List[StorageSearchResult]
+    booking_suggestion: Optional[dict] = None
+
+class VoiceQueryRequest(BaseModel):
+    """Request for voice-powered query"""
+    farmer_lat: float
+    farmer_lng: float
+    farmer_name: Optional[str] = None
+    farmer_phone: Optional[str] = None
+    language_code: str = "hi-IN"  # Default to Hindi
+
+class VoiceTranscriptionResponse(BaseModel):
+    """Response from voice transcription"""
+    transcript: str
+    confidence: float
+    alternatives: List[str]
+    language_detected: str
+    processing_time_ms: int
+
+class VoiceRecommendationResponse(BaseModel):
+    """Response with voice recommendation for missing fields"""
+    missing_fields: List[str]
+    recommendation_text: str
+    audio_available: bool
+    language_detected: str
+    processing_time_ms: int
+
+class SmartVoiceBookingResponse(BaseModel):
+    """Enhanced voice booking response with recommendations"""
+    transcription: VoiceTranscriptionResponse
+    intent: dict
+    missing_fields: List[str]
+    recommendation: Optional[VoiceRecommendationResponse] = None
+    available_storages: List[StorageSearchResult]
+    booking: Optional[dict] = None
+    success: bool
+    message: str
+    requires_more_info: bool
+
+class VoiceBookingResponse(BaseModel):
+    """Response from voice booking"""
+    transcription: VoiceTranscriptionResponse
+    intent: dict
+    available_storages: List[StorageSearchResult]
+    booking: Optional[dict] = None
+    success: bool
+    message: str
+
+class VoiceStorageResponse(BaseModel):
+    """Response for voice input storage"""
+    stored: bool
+    s3_key: str
+    s3_uri: str
+    bucket: str
+    size_bytes: int
+    timestamp: str
+    mock: bool
+
+class StoredVoiceInput(BaseModel):
+    """Stored voice input metadata"""
+    s3_key: str
+    s3_uri: str
+    size: int
+    last_modified: str
+    farmer_name: str
+    farmer_phone: str
+    language_code: str
+    upload_timestamp: str
+    mock: bool
+
+class VoiceInputListResponse(BaseModel):
+    """Response for listing stored voice inputs"""
+    voice_inputs: List[StoredVoiceInput]
+    total_count: int
+    bucket: str
+
+class EnhancedVoiceBookingResponse(BaseModel):
+    """Enhanced voice booking response with S3 storage info"""
+    transcription: VoiceTranscriptionResponse
+    intent: dict
+    missing_fields: List[str]
+    recommendation: Optional[VoiceRecommendationResponse] = None
+    available_storages: List[StorageSearchResult]
+    booking: Optional[dict] = None
+    voice_storage: Optional[VoiceStorageResponse] = None
+    success: bool
+    message: str
+    requires_more_info: bool
+
+class EnhancedVoiceBookingResponse(BaseModel):
+    """Enhanced voice booking response with S3 storage info"""
+    transcription: VoiceTranscriptionResponse
+    intent: dict
+    missing_fields: List[str]
+    recommendation: Optional[VoiceRecommendationResponse] = None
+    available_storages: List[StorageSearchResult]
+    booking: Optional[dict] = None
+    voice_storage: Optional[VoiceStorageResponse] = None
+    success: bool
+    message: str
+    requires_more_info: bool
+
+    class VoiceRecommendationResponse(BaseModel):
+        """Response with voice recommendation for missing fields"""
+        missing_fields: List[str]
+        recommendation_text: str
+        audio_available: bool
+        language_detected: str
+        processing_time_ms: int
+
+    class SmartVoiceBookingResponse(BaseModel):
+        """Enhanced voice booking response with recommendations"""
+        transcription: VoiceTranscriptionResponse
+        intent: dict
+        missing_fields: List[str]
+        recommendation: Optional[VoiceRecommendationResponse] = None
+        available_storages: List[StorageSearchResult]
+        booking: Optional[dict] = None
+        success: bool
+        message: str
+        requires_more_info: bool
+
+    class VoiceBookingResponse(BaseModel):
+        """Response from voice booking"""
+        transcription: VoiceTranscriptionResponse
+        intent: dict
+        available_storages: List[StorageSearchResult]
+        booking: Optional[dict] = None
+        success: bool
+        message: str
 
 # ============ Dependency ============
 def get_db():
@@ -384,3 +534,856 @@ def check_availability(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# 9. AI-Powered Natural Language Query
+@app.post("/api/ai/query", response_model=AIQueryResponse)
+def ai_query(request: AIQueryRequest, db: Session = Depends(get_db)):
+    """
+    Process natural language query from farmer using AI
+    Extract intent and search for available cold storage
+    """
+    try:
+        # Extract intent using AI
+        intent = extract_farmer_intent(request.farmer_query)
+        
+        # Convert quantity to kg if needed
+        quantity_kg = intent.get("quantity", 0)
+        if intent.get("unit") == "ton":
+            quantity_kg = quantity_kg * 1000
+        
+        # Determine start date based on time field
+        time_str = intent.get("time", "today").lower()
+        if time_str in ["today", "aaj"]:
+            start_date = date.today()
+        elif time_str in ["tomorrow", "kal"]:
+            start_date = date.today() + timedelta(days=1)
+        else:
+            start_date = date.today() + timedelta(days=2)
+        
+        # Determine duration based on storage type
+        storage_type = intent.get("storage_type", "short-term")
+        duration_map = {
+            "short-term": 7,
+            "medium-term": 30,
+            "long-term": 90
+        }
+        duration_days = duration_map.get(storage_type, 7)
+        
+        # Search for available cold storages
+        crop_type = intent.get("crop", "")
+        storages = db.query(ColdStorage).all()
+        
+        available_storages = []
+        for storage in storages:
+            # Calculate distance
+            distance = calculate_distance(
+                request.farmer_lat,
+                request.farmer_lng,
+                storage.location_lat,
+                storage.location_lng
+            )
+            
+            # Check if crop is supported
+            supported_crops = storage.supported_crops.lower()
+            if supported_crops != "all" and crop_type:
+                if crop_type.lower() not in supported_crops:
+                    continue
+            
+            # Check capacity for the duration
+            has_capacity = True
+            for i in range(duration_days):
+                check_date = start_date + timedelta(days=i)
+                daily_record = db.query(DailyCapacity).filter(
+                    DailyCapacity.cold_storage_id == storage.id,
+                    DailyCapacity.usage_date == check_date
+                ).first()
+                
+                used = daily_record.used_capacity_kg if daily_record else 0.0
+                available = storage.total_capacity_kg - used
+                
+                if available < quantity_kg:
+                    has_capacity = False
+                    break
+            
+            if has_capacity:
+                total_cost = quantity_kg * storage.price_per_kg_per_day * duration_days
+                available_capacity = storage.total_capacity_kg - (daily_record.used_capacity_kg if daily_record else 0.0)
+                
+                available_storages.append(StorageSearchResult(
+                    storage_id=storage.id,
+                    storage_name=storage.name,
+                    address=storage.address,
+                    distance_km=round(distance, 2),
+                    price_per_kg_per_day=storage.price_per_kg_per_day,
+                    total_cost=round(total_cost, 2),
+                    available_capacity_kg=available_capacity,
+                    supported_crops=storage.supported_crops
+                ))
+        
+        # Sort by distance
+        available_storages.sort(key=lambda x: x.distance_km)
+        
+        # Create booking suggestion for the closest storage
+        booking_suggestion = None
+        if available_storages and request.farmer_name and request.farmer_phone:
+            closest = available_storages[0]
+            booking_suggestion = {
+                "cold_storage_id": closest.storage_id,
+                "cold_storage_name": closest.storage_name,
+                "quantity_kg": quantity_kg,
+                "booking_date": str(start_date),
+                "duration_days": duration_days,
+                "total_cost": closest.total_cost,
+                "distance_km": closest.distance_km
+            }
+        
+        return AIQueryResponse(
+            intent=intent,
+            available_storages=available_storages,
+            booking_suggestion=booking_suggestion
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI query failed: {str(e)}")
+
+# 10. AI-Powered Booking (Complete Flow)
+@app.post("/api/ai/book")
+def ai_book(request: AIQueryRequest, db: Session = Depends(get_db)):
+    """
+    Complete AI-powered booking flow:
+    1. Extract intent from natural language
+    2. Search for available storage
+    3. Create booking automatically
+    """
+    if not request.farmer_name or not request.farmer_phone:
+        raise HTTPException(
+            status_code=400,
+            detail="farmer_name and farmer_phone are required for booking"
+        )
+    
+    try:
+        # Get AI query results
+        ai_result = ai_query(request, db)
+        
+        if not ai_result.available_storages:
+            return {
+                "success": False,
+                "message": "No available cold storage found matching your requirements",
+                "intent": ai_result.intent
+            }
+        
+        # Use the closest storage
+        closest_storage = ai_result.available_storages[0]
+        
+        # Extract booking details from intent
+        intent = ai_result.intent
+        quantity_kg = intent.get("quantity", 0)
+        if intent.get("unit") == "ton":
+            quantity_kg = quantity_kg * 1000
+        
+        time_str = intent.get("time", "today").lower()
+        if time_str in ["today", "aaj"]:
+            start_date = date.today()
+        elif time_str in ["tomorrow", "kal"]:
+            start_date = date.today() + timedelta(days=1)
+        else:
+            start_date = date.today() + timedelta(days=2)
+        
+        storage_type = intent.get("storage_type", "short-term")
+        duration_map = {
+            "short-term": 7,
+            "medium-term": 30,
+            "long-term": 90
+        }
+        duration_days = duration_map.get(storage_type, 7)
+        
+        # Create booking
+        booking_data = BookingCreate(
+            farmer_name=request.farmer_name,
+            farmer_phone=request.farmer_phone,
+            cold_storage_id=closest_storage.storage_id,
+            quantity_kg=quantity_kg,
+            booking_date=start_date,
+            duration_days=duration_days,
+            crop_type=intent.get("crop")
+        )
+        
+        booking = create_booking(booking_data, db)
+        
+        return {
+            "success": True,
+            "message": "Booking created successfully",
+            "intent": intent,
+            "booking": {
+                "booking_reference": booking.booking_reference,
+                "cold_storage_name": booking.cold_storage_name,
+                "quantity_kg": booking.quantity_kg,
+                "booking_date": str(booking.booking_date),
+                "duration_days": booking.duration_days,
+                "total_cost": booking.total_cost,
+                "distance_km": closest_storage.distance_km
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI booking failed: {str(e)}")
+# 11. Voice Transcription Endpoint
+@app.post("/api/voice/transcribe", response_model=VoiceTranscriptionResponse)
+async def transcribe_voice(
+    audio_file: UploadFile = File(...),
+    language_code: str = "hi-IN"
+):
+    """
+    Transcribe voice input to text using Amazon Transcribe
+    Supports Hindi (hi-IN) and Indian English (en-IN)
+    """
+    import time
+    start_time = time.time()
+    
+    # Validate file type
+    if not audio_file.content_type.startswith('audio/'):
+        raise HTTPException(
+            status_code=400,
+            detail="File must be an audio file"
+        )
+    
+    try:
+        # Read audio file content
+        audio_content = await audio_file.read()
+        
+        # Transcribe using voice service
+        result = voice_service.transcribe_audio_bytes(audio_content, language_code)
+        
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        return VoiceTranscriptionResponse(
+            transcript=result['transcript'],
+            confidence=result['confidence'],
+            alternatives=result.get('alternatives', []),
+            language_detected=language_code,
+            processing_time_ms=processing_time
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Voice transcription failed: {str(e)}"
+        )
+
+# 12. Voice Query Endpoint (Voice to Storage Search)
+@app.post("/api/voice/query")
+async def voice_query(
+    audio_file: UploadFile = File(...),
+    farmer_lat: float = 28.6139,
+    farmer_lng: float = 77.2090,
+    farmer_name: Optional[str] = None,
+    farmer_phone: Optional[str] = None,
+    language_code: str = "hi-IN",
+    db: Session = Depends(get_db)
+):
+    """
+    Complete voice-to-storage-search workflow:
+    1. Transcribe voice to text
+    2. Extract intent using AI
+    3. Search for available storage
+    """
+    try:
+        # Step 1: Transcribe voice
+        audio_content = await audio_file.read()
+        transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
+        
+        if transcription_result['status'] != 'completed':
+            raise HTTPException(
+                status_code=500,
+                detail="Voice transcription failed"
+            )
+        
+        farmer_query = transcription_result['transcript']
+        
+        # Step 2: Process with AI (reuse existing logic)
+        ai_request = AIQueryRequest(
+            farmer_query=farmer_query,
+            farmer_lat=farmer_lat,
+            farmer_lng=farmer_lng,
+            farmer_name=farmer_name,
+            farmer_phone=farmer_phone
+        )
+        
+        ai_result = ai_query(ai_request, db)
+        
+        # Step 3: Return combined result
+        return {
+            "transcription": {
+                "transcript": transcription_result['transcript'],
+                "confidence": transcription_result['confidence'],
+                "alternatives": transcription_result.get('alternatives', []),
+                "language_detected": language_code,
+                "processing_time_ms": 0  # Will be calculated in frontend
+            },
+            "intent": ai_result.intent,
+            "available_storages": ai_result.available_storages,
+            "booking_suggestion": ai_result.booking_suggestion
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Voice query processing failed: {str(e)}"
+        )
+
+# 13. Voice Booking Endpoint (Complete Voice-to-Booking)
+@app.post("/api/voice/book", response_model=VoiceBookingResponse)
+async def voice_book(
+    audio_file: UploadFile = File(...),
+    farmer_lat: float = 28.6139,
+    farmer_lng: float = 77.2090,
+    farmer_name: str = "Unknown Farmer",
+    farmer_phone: str = "+919999999999",
+    language_code: str = "hi-IN",
+    db: Session = Depends(get_db)
+):
+    """
+    Complete voice-to-booking workflow:
+    1. Transcribe voice to text
+    2. Extract intent using AI
+    3. Search for available storage
+    4. Create booking automatically
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        # Step 1: Transcribe voice
+        audio_content = await audio_file.read()
+        transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
+        
+        if transcription_result['status'] != 'completed':
+            return VoiceBookingResponse(
+                transcription=VoiceTranscriptionResponse(
+                    transcript="",
+                    confidence=0.0,
+                    alternatives=[],
+                    language_detected=language_code,
+                    processing_time_ms=int((time.time() - start_time) * 1000)
+                ),
+                intent={},
+                available_storages=[],
+                booking=None,
+                success=False,
+                message="Voice transcription failed"
+            )
+        
+        farmer_query = transcription_result['transcript']
+        
+        # Step 2: Process with AI booking (reuse existing logic)
+        ai_request = AIQueryRequest(
+            farmer_query=farmer_query,
+            farmer_lat=farmer_lat,
+            farmer_lng=farmer_lng,
+            farmer_name=farmer_name,
+            farmer_phone=farmer_phone
+        )
+        
+        # Use existing AI booking logic
+        booking_result = ai_book(ai_request, db)
+        
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        return VoiceBookingResponse(
+            transcription=VoiceTranscriptionResponse(
+                transcript=transcription_result['transcript'],
+                confidence=transcription_result['confidence'],
+                alternatives=transcription_result.get('alternatives', []),
+                language_detected=language_code,
+                processing_time_ms=processing_time
+            ),
+            intent=booking_result.get('intent', {}),
+            available_storages=[],  # Not included in booking response
+            booking=booking_result.get('booking'),
+            success=booking_result.get('success', False),
+            message=booking_result.get('message', '')
+        )
+        
+    except Exception as e:
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        return VoiceBookingResponse(
+            transcription=VoiceTranscriptionResponse(
+                transcript="",
+                confidence=0.0,
+                alternatives=[],
+                language_detected=language_code,
+                processing_time_ms=processing_time
+            ),
+            intent={},
+            available_storages=[],
+            booking=None,
+            success=False,
+            message=f"Voice booking failed: {str(e)}"
+        )
+
+# 14. Voice Test Endpoint (For Development)
+@app.post("/api/voice/test")
+async def test_voice_service():
+    """
+    Test endpoint to verify voice service configuration
+    """
+    try:
+        # Test with mock data
+        mock_audio_path = "test_audio.wav"
+        result = voice_service._get_mock_transcription(mock_audio_path)
+        
+        return {
+            "voice_service_status": "operational",
+            "aws_transcribe_configured": voice_service.transcribe_client is not None,
+            "s3_configured": voice_service.s3_client is not None,
+            "mock_transcription": result,
+            "supported_languages": ["hi-IN", "en-IN", "en-US"],
+            "message": "Voice service is ready. Upload audio files to /api/voice/transcribe"
+        }
+        
+    except Exception as e:
+        return {
+            "voice_service_status": "error",
+            "error": str(e),
+            "message": "Voice service configuration needs attention"
+        }
+
+# 15. Smart Voice Booking with Recommendations
+@app.post("/api/voice/smart-book", response_model=SmartVoiceBookingResponse)
+async def smart_voice_book(
+    audio_file: UploadFile = File(...),
+    farmer_lat: float = 28.6139,
+    farmer_lng: float = 77.2090,
+    farmer_name: str = "Unknown Farmer",
+    farmer_phone: str = "+919999999999",
+    language_code: str = "hi-IN",
+    db: Session = Depends(get_db)
+):
+    """
+    Smart voice booking with missing field detection and voice recommendations:
+    1. Transcribe voice to text
+    2. Extract intent using AI
+    3. Detect missing required fields
+    4. Generate voice recommendations for missing fields
+    5. If all fields present, proceed with booking
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        # Step 1: Transcribe voice
+        audio_content = await audio_file.read()
+        transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
+        
+        if transcription_result['status'] != 'completed':
+            return SmartVoiceBookingResponse(
+                transcription=VoiceTranscriptionResponse(
+                    transcript="",
+                    confidence=0.0,
+                    alternatives=[],
+                    language_detected=language_code,
+                    processing_time_ms=int((time.time() - start_time) * 1000)
+                ),
+                intent={},
+                missing_fields=["transcription_failed"],
+                recommendation=None,
+                available_storages=[],
+                booking=None,
+                success=False,
+                message="Voice transcription failed",
+                requires_more_info=True
+            )
+        
+        farmer_query = transcription_result['transcript']
+        
+        # Step 2: Extract intent using AI
+        intent = extract_farmer_intent(farmer_query)
+        
+        # Step 3: Check for missing required fields
+        required_fields = ["crop", "quantity"]
+        missing_fields = []
+        
+        if not intent.get("crop") or intent.get("crop") == "unknown":
+            missing_fields.append("crop")
+        if not intent.get("quantity") or intent.get("quantity") == 0:
+            missing_fields.append("quantity")
+        
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        # Step 4: If fields are missing, generate voice recommendation
+        if missing_fields:
+            recommendation_text = voice_service.generate_missing_field_prompt(missing_fields, language_code)
+            
+            return SmartVoiceBookingResponse(
+                transcription=VoiceTranscriptionResponse(
+                    transcript=transcription_result['transcript'],
+                    confidence=transcription_result['confidence'],
+                    alternatives=transcription_result.get('alternatives', []),
+                    language_detected=language_code,
+                    processing_time_ms=processing_time
+                ),
+                intent=intent,
+                missing_fields=missing_fields,
+                recommendation=VoiceRecommendationResponse(
+                    missing_fields=missing_fields,
+                    recommendation_text=recommendation_text,
+                    audio_available=True,
+                    language_detected=language_code,
+                    processing_time_ms=processing_time
+                ),
+                available_storages=[],
+                booking=None,
+                success=False,
+                message=f"Missing required information: {', '.join(missing_fields)}",
+                requires_more_info=True
+            )
+        
+        # Step 5: All fields present, proceed with booking
+        ai_request = AIQueryRequest(
+            farmer_query=farmer_query,
+            farmer_lat=farmer_lat,
+            farmer_lng=farmer_lng,
+            farmer_name=farmer_name,
+            farmer_phone=farmer_phone
+        )
+        
+        # Search for available storage
+        search_result = ai_query(ai_request, db)
+        
+        if not search_result.available_storages:
+            return SmartVoiceBookingResponse(
+                transcription=VoiceTranscriptionResponse(
+                    transcript=transcription_result['transcript'],
+                    confidence=transcription_result['confidence'],
+                    alternatives=transcription_result.get('alternatives', []),
+                    language_detected=language_code,
+                    processing_time_ms=processing_time
+                ),
+                intent=intent,
+                missing_fields=[],
+                recommendation=None,
+                available_storages=[],
+                booking=None,
+                success=False,
+                message="No available cold storage found matching your requirements",
+                requires_more_info=False
+            )
+        
+        # Create booking
+        booking_result = ai_book(ai_request, db)
+        
+        return SmartVoiceBookingResponse(
+            transcription=VoiceTranscriptionResponse(
+                transcript=transcription_result['transcript'],
+                confidence=transcription_result['confidence'],
+                alternatives=transcription_result.get('alternatives', []),
+                language_detected=language_code,
+                processing_time_ms=processing_time
+            ),
+            intent=intent,
+            missing_fields=[],
+            recommendation=None,
+            available_storages=search_result.available_storages,
+            booking=booking_result.get('booking'),
+            success=booking_result.get('success', False),
+            message=booking_result.get('message', ''),
+            requires_more_info=False
+        )
+        
+    except Exception as e:
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        return SmartVoiceBookingResponse(
+            transcription=VoiceTranscriptionResponse(
+                transcript="",
+                confidence=0.0,
+                alternatives=[],
+                language_detected=language_code,
+                processing_time_ms=processing_time
+            ),
+            intent={},
+            missing_fields=["system_error"],
+            recommendation=None,
+            available_storages=[],
+            booking=None,
+            success=False,
+            message=f"Smart voice booking failed: {str(e)}",
+            requires_more_info=True
+        )
+
+# 16. Generate Voice Recommendation Audio
+@app.post("/api/voice/recommendation-audio")
+async def get_recommendation_audio(
+    missing_fields: List[str],
+    language_code: str = "hi-IN"
+):
+    """
+    Generate voice recommendation audio for missing fields
+    """
+    try:
+        recommendation_text = voice_service.generate_missing_field_prompt(missing_fields, language_code)
+        audio_bytes = voice_service.generate_voice_recommendation(recommendation_text, language_code)
+        
+        from fastapi.responses import Response
+        return Response(
+            content=audio_bytes,
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": "attachment; filename=recommendation.mp3",
+                "X-Recommendation-Text": recommendation_text
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Voice recommendation generation failed: {str(e)}"
+        )
+# 17. Enhanced Voice Booking with S3 Storage
+@app.post("/api/voice/enhanced-book", response_model=EnhancedVoiceBookingResponse)
+async def enhanced_voice_book(
+    audio_file: UploadFile = File(...),
+    farmer_lat: float = 28.6139,
+    farmer_lng: float = 77.2090,
+    farmer_name: str = "Unknown Farmer",
+    farmer_phone: str = "+919999999999",
+    language_code: str = "hi-IN",
+    store_in_s3: bool = True,
+    db: Session = Depends(get_db)
+):
+    """
+    Enhanced voice booking with S3 storage:
+    1. Store voice input in S3 bucket
+    2. Transcribe voice to text
+    3. Extract intent using AI
+    4. Detect missing required fields
+    5. Generate voice recommendations for missing fields
+    6. If all fields present, proceed with booking
+    """
+    import time
+    start_time = time.time()
+    
+    try:
+        # Step 1: Read audio content
+        audio_content = await audio_file.read()
+        
+        # Step 2: Store voice input in S3 (if enabled)
+        voice_storage_info = None
+        if store_in_s3:
+            farmer_info = {
+                'name': farmer_name,
+                'phone': farmer_phone
+            }
+            storage_result = voice_service.store_voice_input_s3(audio_content, farmer_info, language_code)
+            voice_storage_info = VoiceStorageResponse(**storage_result)
+        
+        # Step 3: Transcribe voice
+        transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
+        
+        if transcription_result['status'] != 'completed':
+            return EnhancedVoiceBookingResponse(
+                transcription=VoiceTranscriptionResponse(
+                    transcript="",
+                    confidence=0.0,
+                    alternatives=[],
+                    language_detected=language_code,
+                    processing_time_ms=int((time.time() - start_time) * 1000)
+                ),
+                intent={},
+                missing_fields=["transcription_failed"],
+                recommendation=None,
+                available_storages=[],
+                booking=None,
+                voice_storage=voice_storage_info,
+                success=False,
+                message="Voice transcription failed",
+                requires_more_info=True
+            )
+        
+        farmer_query = transcription_result['transcript']
+        
+        # Step 4: Extract intent using AI
+        intent = extract_farmer_intent(farmer_query)
+        
+        # Step 5: Check for missing required fields
+        required_fields = ["crop", "quantity"]
+        missing_fields = []
+        
+        if not intent.get("crop") or intent.get("crop") == "unknown":
+            missing_fields.append("crop")
+        if not intent.get("quantity") or intent.get("quantity") == 0:
+            missing_fields.append("quantity")
+        
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        # Step 6: If fields are missing, generate voice recommendation
+        if missing_fields:
+            recommendation_text = voice_service.generate_missing_field_prompt(missing_fields, language_code)
+            
+            return EnhancedVoiceBookingResponse(
+                transcription=VoiceTranscriptionResponse(
+                    transcript=transcription_result['transcript'],
+                    confidence=transcription_result['confidence'],
+                    alternatives=transcription_result.get('alternatives', []),
+                    language_detected=language_code,
+                    processing_time_ms=processing_time
+                ),
+                intent=intent,
+                missing_fields=missing_fields,
+                recommendation=VoiceRecommendationResponse(
+                    missing_fields=missing_fields,
+                    recommendation_text=recommendation_text,
+                    audio_available=True,
+                    language_detected=language_code,
+                    processing_time_ms=processing_time
+                ),
+                available_storages=[],
+                booking=None,
+                voice_storage=voice_storage_info,
+                success=False,
+                message=f"Missing required information: {', '.join(missing_fields)}",
+                requires_more_info=True
+            )
+        
+        # Step 7: All fields present, proceed with booking
+        ai_request = AIQueryRequest(
+            farmer_query=farmer_query,
+            farmer_lat=farmer_lat,
+            farmer_lng=farmer_lng,
+            farmer_name=farmer_name,
+            farmer_phone=farmer_phone
+        )
+        
+        # Search for available storage
+        search_result = ai_query(ai_request, db)
+        
+        if not search_result.available_storages:
+            return EnhancedVoiceBookingResponse(
+                transcription=VoiceTranscriptionResponse(
+                    transcript=transcription_result['transcript'],
+                    confidence=transcription_result['confidence'],
+                    alternatives=transcription_result.get('alternatives', []),
+                    language_detected=language_code,
+                    processing_time_ms=processing_time
+                ),
+                intent=intent,
+                missing_fields=[],
+                recommendation=None,
+                available_storages=[],
+                booking=None,
+                voice_storage=voice_storage_info,
+                success=False,
+                message="No available cold storage found matching your requirements",
+                requires_more_info=False
+            )
+        
+        # Create booking
+        booking_result = ai_book(ai_request, db)
+        
+        return EnhancedVoiceBookingResponse(
+            transcription=VoiceTranscriptionResponse(
+                transcript=transcription_result['transcript'],
+                confidence=transcription_result['confidence'],
+                alternatives=transcription_result.get('alternatives', []),
+                language_detected=language_code,
+                processing_time_ms=processing_time
+            ),
+            intent=intent,
+            missing_fields=[],
+            recommendation=None,
+            available_storages=search_result.available_storages,
+            booking=booking_result.get('booking'),
+            voice_storage=voice_storage_info,
+            success=booking_result.get('success', False),
+            message=booking_result.get('message', ''),
+            requires_more_info=False
+        )
+        
+    except Exception as e:
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        return EnhancedVoiceBookingResponse(
+            transcription=VoiceTranscriptionResponse(
+                transcript="",
+                confidence=0.0,
+                alternatives=[],
+                language_detected=language_code,
+                processing_time_ms=processing_time
+            ),
+            intent={},
+            missing_fields=["system_error"],
+            recommendation=None,
+            available_storages=[],
+            booking=None,
+            voice_storage=None,
+            success=False,
+            message=f"Enhanced voice booking failed: {str(e)}",
+            requires_more_info=True
+        )
+
+# 18. List Stored Voice Inputs
+@app.get("/api/voice/stored-inputs", response_model=VoiceInputListResponse)
+def list_voice_inputs(
+    farmer_phone: Optional[str] = None,
+    limit: int = 10
+):
+    """
+    List stored voice inputs from S3 bucket
+    """
+    try:
+        voice_inputs = voice_service.list_stored_voice_inputs(farmer_phone, limit)
+        
+        stored_inputs = [StoredVoiceInput(**input_data) for input_data in voice_inputs]
+        
+        return VoiceInputListResponse(
+            voice_inputs=stored_inputs,
+            total_count=len(stored_inputs),
+            bucket=voice_service.s3_bucket
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list voice inputs: {str(e)}"
+        )
+
+# 19. Test S3 Voice Storage
+@app.post("/api/voice/test-s3-storage")
+async def test_s3_storage(
+    audio_file: UploadFile = File(...),
+    farmer_name: str = "Test Farmer",
+    farmer_phone: str = "+919999999999",
+    language_code: str = "hi-IN"
+):
+    """
+    Test S3 storage functionality for voice inputs
+    """
+    try:
+        # Read audio content
+        audio_content = await audio_file.read()
+        
+        # Store in S3
+        farmer_info = {
+            'name': farmer_name,
+            'phone': farmer_phone
+        }
+        
+        storage_result = voice_service.store_voice_input_s3(audio_content, farmer_info, language_code)
+        
+        return {
+            "test_status": "success",
+            "storage_info": storage_result,
+            "message": "Voice input successfully stored in S3",
+            "s3_bucket": voice_service.s3_bucket,
+            "aws_configured": voice_service.s3_client is not None
+        }
+        
+    except Exception as e:
+        return {
+            "test_status": "error",
+            "error": str(e),
+            "message": "Failed to store voice input in S3",
+            "s3_bucket": voice_service.s3_bucket,
+            "aws_configured": voice_service.s3_client is not None
+        }
