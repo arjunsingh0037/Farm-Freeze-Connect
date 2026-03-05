@@ -205,8 +205,8 @@ DEBUG=True
 # AWS Configuration (Alternative PostgreSQL setup)
 # DATABASE_URL=postgresql://postgres:password@localhost:5432/farmfreeze
 
-# AI Services
-BEDROCK_MODEL_ID=anthropic.claude-v2
+# Claude API Fallback (when Bedrock fails)
+CLAUDE_API_KEY=your_claude_api_key_here
 
 # Application
 DEBUG=true
@@ -219,6 +219,13 @@ SECRET_KEY=your-secret-key
 2. **Enable Bedrock**: AWS Console → Bedrock → Model Access → Request Claude 3 Haiku
 3. **Create S3 Bucket**: Create bucket in us-east-1 region
 4. **IAM Permissions**: Ensure user has S3, Transcribe, Bedrock, Polly access
+
+### Claude API Setup (Fallback)
+
+1. **Get API Key**: Visit https://console.anthropic.com/
+2. **Create API Key**: Account Settings → API Keys → Create Key
+3. **Add to .env**: `CLAUDE_API_KEY=your_claude_api_key_here`
+4. **Test Fallback**: Run `python test_claude_fallback.py`
 
 ## API Documentation
 
@@ -325,16 +332,31 @@ curl -X POST "http://localhost:8000/api/v1/ai/recommend" \
 ❌ **Needs Setup**: Bedrock payment method
 🚀 **Future**: Complete serverless architecture with Lambda, DynamoDB, RDS, SNS
 
-## AI Components
+### AI Components
 
-### 1. Voice Query Processing
+### 1. Voice Query Processing with Fallback
 ```python
-# Uses Amazon Transcribe for speech-to-text
-# Uses Amazon Translate for language normalization
-# Uses Amazon Bedrock for entity extraction
+# Primary: Uses Amazon Transcribe for speech-to-text
+# Primary: Uses Amazon Bedrock (Claude 3 Haiku) for intent extraction
+# Fallback: Uses direct Claude API when Bedrock fails
+# Last Resort: Mock responses for development
 ```
 
-### 2. Recommendation Engine
+### 2. AI Service Fallback Chain
+```python
+# 1. Try AWS Bedrock (Claude 3 Haiku)
+# 2. If Bedrock fails → Claude API (claude-3-haiku-20240307)  
+# 3. If Claude API fails → Mock data
+```
+
+**Fallback Triggers:**
+- AWS credentials missing
+- Bedrock payment method issues
+- Use case details not submitted
+- Network/service errors
+- API rate limits
+
+### 3. Recommendation Engine
 ```python
 # Multi-factor scoring algorithm
 score = (

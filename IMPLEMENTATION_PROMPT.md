@@ -1,3 +1,15 @@
+# 🤖 Claude API Fallback Implementation Prompt
+
+## Task Overview
+Implement a robust AI service with Claude API fallback for a FarmFreeze Connect project. The system should try AWS Bedrock first, then fallback to direct Claude API, and finally use mock data if both fail.
+
+## Required Changes
+
+### 1. Modify AI Service File (`backend/app/ai_service.py`)
+
+Replace the existing AI service with this enhanced version that includes Claude API fallback:
+
+```python
 """
 AI Service for FarmFreeze Connect
 Integrates Amazon Bedrock AI for natural language processing with Claude API fallback
@@ -303,3 +315,187 @@ def extract_farmer_intent(farmer_query: str) -> dict:
         except Exception as fallback_error:
             print(f"❌ Claude API fallback also failed: {fallback_error}")
             raise Exception(f"Both Bedrock and Claude API failed. Bedrock: {str(e)}, Claude: {fallback_error}")
+```
+
+### 2. Update Environment Configuration
+
+Create or update `backend/.env.example`:
+
+```env
+# AWS Configuration
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your_aws_access_key_here
+AWS_SECRET_ACCESS_KEY=your_aws_secret_key_here
+
+# Bedrock Model
+BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+
+# Claude API Fallback (when Bedrock fails)
+CLAUDE_API_KEY=your_claude_api_key_here
+
+# S3 Bucket for Voice Storage
+S3_BUCKET_NAME=farmfreeze-voice-uploads
+
+# Database
+DATABASE_URL=sqlite:///./farmfreeze.db
+
+# Application Settings
+DEBUG=true
+SECRET_KEY=your-secret-key-change-in-production
+```
+
+### 3. Ensure Dependencies
+
+Make sure `requests` is in your `requirements.txt`:
+
+```txt
+# HTTP Requests
+requests==2.31.0
+```
+
+### 4. Create Test Script
+
+Create `test_claude_fallback.py` to verify the implementation:
+
+```python
+#!/usr/bin/env python3
+"""
+Test script for Claude API fallback functionality
+"""
+import sys
+import os
+
+# Add backend to path
+sys.path.insert(0, 'backend')
+
+def test_claude_fallback():
+    """Test the Claude API fallback functionality"""
+    print("🧪 Testing Claude API Fallback")
+    print("=" * 40)
+    
+    try:
+        from backend.app.ai_service import extract_farmer_intent
+        
+        # Test queries
+        test_queries = [
+            "मुझे 100 किलो टमाटर स्टोर करना है कल से",
+            "I need to store 50 kg potatoes from tomorrow", 
+            "मुझे स्टोरेज चाहिए",
+            "Need cold storage for 200 kg onions"
+        ]
+        
+        print("📝 Test Queries:")
+        for i, query in enumerate(test_queries, 1):
+            print(f"   {i}. {query}")
+        
+        print("\n🔄 Testing AI Processing...")
+        
+        for i, query in enumerate(test_queries, 1):
+            print(f"\n--- Test {i} ---")
+            print(f"Input: {query}")
+            
+            try:
+                result = extract_farmer_intent(query)
+                
+                # Show which service was used
+                fallback_used = result.get('fallback_used', 'unknown')
+                if fallback_used == 'bedrock':
+                    print("✅ AWS Bedrock successful")
+                elif fallback_used == 'claude_api':
+                    print("🔄 Claude API fallback used")
+                elif fallback_used == 'mock':
+                    print("⚠️  Mock data used (both services failed)")
+                
+                # Show extracted data
+                crop = result.get('crop', 'unknown')
+                quantity = result.get('quantity', 0)
+                unit = result.get('unit', 'kg')
+                urgency = result.get('urgency', 'unknown')
+                
+                print(f"Extracted: {crop} - {quantity} {unit} (urgency: {urgency})")
+                
+                if result.get('mock'):
+                    print(f"⚠️  Error: {result.get('error', 'Unknown error')}")
+                
+            except Exception as e:
+                print(f"❌ Error: {e}")
+        
+        print("\n" + "=" * 40)
+        print("🎉 Test completed!")
+        
+        # Show configuration status
+        print("\n📋 Configuration Status:")
+        aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
+        claude_key = os.environ.get("CLAUDE_API_KEY")
+        
+        print(f"   AWS Credentials: {'✅ Found' if aws_key else '❌ Missing'}")
+        print(f"   Claude API Key: {'✅ Found' if claude_key else '❌ Missing'}")
+        
+        if not aws_key and not claude_key:
+            print("\n⚠️  No AI credentials found!")
+            print("   Add to backend/.env:")
+            print("   AWS_ACCESS_KEY_ID=your_aws_key")
+            print("   CLAUDE_API_KEY=your_claude_key")
+        elif not aws_key:
+            print("\n💡 Only Claude API available (Bedrock will fallback)")
+        elif not claude_key:
+            print("\n💡 Only AWS Bedrock available (no fallback)")
+        else:
+            print("\n✅ Both AI services configured!")
+            
+    except ImportError as e:
+        print(f"❌ Import error: {e}")
+        print("Make sure you're in the project root directory")
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+
+if __name__ == "__main__":
+    test_claude_fallback()
+```
+
+### 5. Setup Instructions
+
+1. **Get Claude API Key**: 
+   - Visit https://console.anthropic.com/
+   - Create account and generate API key
+   - Add to `.env`: `CLAUDE_API_KEY=your_claude_api_key_here`
+
+2. **Test the Implementation**:
+   ```bash
+   python test_claude_fallback.py
+   ```
+
+3. **Expected Behavior**:
+   - System tries AWS Bedrock first
+   - If Bedrock fails → Falls back to Claude API
+   - If both fail → Returns mock data
+   - Response includes `fallback_used` field indicating which service was used
+
+### 6. Fallback Chain Logic
+
+```
+Primary: AWS Bedrock (Claude 3 Haiku)
+    ↓ (if fails)
+Fallback: Direct Claude API (claude-3-haiku-20240307)
+    ↓ (if fails)
+Last Resort: Mock Data
+```
+
+### 7. Error Handling
+
+The system handles these failure scenarios:
+- AWS credentials missing
+- Bedrock payment method issues
+- Use case details not submitted
+- Network/SSL errors
+- API rate limits
+- JSON parsing errors
+
+### 8. Response Format
+
+All responses include a `fallback_used` field:
+- `"bedrock"` - AWS Bedrock successful
+- `"claude_api"` - Claude API fallback used
+- `"mock"` - Both services failed, mock data returned
+
+This implementation provides a robust AI service that gracefully degrades through multiple fallback layers, ensuring the application continues working even when primary services are unavailable.
