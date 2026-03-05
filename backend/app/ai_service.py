@@ -26,46 +26,41 @@ def extract_farmer_intent_claude_api(farmer_query: str) -> dict:
     claude_api_key = os.environ.get("CLAUDE_API_KEY")
     
     if not claude_api_key:
-        print("⚠️  Claude API key not found, using mock response")
-        return {
-            "input_mode": "voice",
-            "crop": "tomato", 
-            "quantity": 100,
-            "unit": "kg",
-            "time": "tomorrow",
-            "intent": "find cold storage",
-            "urgency": "high",
-            "storage_type": "short-term",
-            "confidence": 0.5,
-            "missing_info": [],
-            "mock": True,
-            "error": "No Claude API key",
-            "fallback_used": "claude_api"
-        }
+        raise Exception("CLAUDE_API_KEY not found in environment variables.")
     
-    # Construct the prompt (same as Bedrock)
+    # Construct the prompt (strictly follow the instructions)
     prompt_template = """You are an AI decision engine for Indian smallholder farmers using a cold storage marketplace. 
  
  Your task is to extract structured intent from a farmer request. 
  
  IMPORTANT RULES: 
  - Return ONLY valid JSON. 
- - Do NOT add explanations. 
+ - Do NOT include explanations. 
  - Do NOT include markdown. 
  - Do NOT include comments. 
- - Keep values normalized and simple. 
+ - Normalize values. 
  
- Extract the following fields: 
- - input_mode: always "voice" 
- - crop: name of crop (lowercase) 
- - quantity: numeric value only 
- - unit: kg or ton 
- - time: when storage is needed (e.g., today, tomorrow, date) 
- - intent: farmer's goal (e.g., find cold storage) 
- - urgency: low / medium / high (today / tomorrow / kal → high; 2–3 days / next week → medium; later → low) 
- - storage_type: short-term / medium-term / long-term (tomato, leafy vegetables → short-term; potato, banana → medium-term; onion → long-term) 
- - confidence: number between 0 and 1 indicating certainty 
- - missing_info: list of strings indicating what information is missing (e.g., ["crop", "quantity"]) 
+ RULES FOR URGENCY: 
+ - today or tomorrow -> high 
+ - 2-3 days -> medium 
+ - later -> low 
+ 
+ RULES FOR STORAGE TYPE: 
+ - tomato -> short-term 
+ - leafy vegetables -> short-term 
+ - banana -> medium-term 
+ - potato -> medium-term 
+ - onion -> long-term 
+ 
+ Extract ONLY the following fields in JSON: 
+ - crop: string 
+ - quantity: number 
+ - unit: "kg" or "ton" 
+ - time: string 
+ - intent: string 
+ - urgency: "low" | "medium" | "high" 
+ - storage_type: "short-term" | "medium-term" | "long-term" 
+ - confidence: number (0.0 - 1.0) 
  
  Farmer request: 
  "{FARMER_QUERY}" """
@@ -173,29 +168,39 @@ def extract_farmer_intent(farmer_query: str) -> dict:
             aws_secret_access_key=aws_secret_access_key
         )
         
-        # Construct the prompt
+        # Construct the prompt (strictly follow the instructions)
         prompt_template = """You are an AI decision engine for Indian smallholder farmers using a cold storage marketplace. 
  
  Your task is to extract structured intent from a farmer request. 
  
  IMPORTANT RULES: 
  - Return ONLY valid JSON. 
- - Do NOT add explanations. 
+ - Do NOT include explanations. 
  - Do NOT include markdown. 
  - Do NOT include comments. 
- - Keep values normalized and simple. 
+ - Normalize values. 
  
- Extract the following fields: 
- - input_mode: always "voice" 
- - crop: name of crop (lowercase) 
- - quantity: numeric value only 
- - unit: kg or ton 
- - time: when storage is needed (e.g., today, tomorrow, date) 
- - intent: farmer's goal (e.g., find cold storage) 
- - urgency: low / medium / high (today / tomorrow / kal → high; 2–3 days / next week → medium; later → low) 
- - storage_type: short-term / medium-term / long-term (tomato, leafy vegetables → short-term; potato, banana → medium-term; onion → long-term) 
- - confidence: number between 0 and 1 indicating certainty 
- - missing_info: list of strings indicating what information is missing (e.g., ["crop", "quantity"]) 
+ RULES FOR URGENCY: 
+ - today or tomorrow -> high 
+ - 2-3 days -> medium 
+ - later -> low 
+ 
+ RULES FOR STORAGE TYPE: 
+ - tomato -> short-term 
+ - leafy vegetables -> short-term 
+ - banana -> medium-term 
+ - potato -> medium-term 
+ - onion -> long-term 
+ 
+ Extract ONLY the following fields in JSON: 
+ - crop: string 
+ - quantity: number 
+ - unit: "kg" or "ton" 
+ - time: string 
+ - intent: string 
+ - urgency: "low" | "medium" | "high" 
+ - storage_type: "short-term" | "medium-term" | "long-term" 
+ - confidence: number (0.0 - 1.0) 
  
  Farmer request: 
  "{FARMER_QUERY}" """
@@ -267,22 +272,7 @@ def extract_farmer_intent(farmer_query: str) -> dict:
             return extract_farmer_intent_claude_api(farmer_query)
         except Exception as fallback_error:
             print(f"❌ Claude API fallback also failed: {fallback_error}")
-            # Return mock data as last resort
-            return {
-                "input_mode": "voice",
-                "crop": "tomato",
-                "quantity": 100,
-                "unit": "kg",
-                "time": "tomorrow",
-                "intent": "find cold storage",
-                "urgency": "high",
-                "storage_type": "short-term",
-                "confidence": 0.5,
-                "missing_info": [],
-                "mock": True,
-                "error": f"Both Bedrock and Claude API failed. Bedrock: {error_message}, Claude: {fallback_error}",
-                "fallback_used": "mock"
-            }
+            raise Exception(f"Both Bedrock and Claude API failed. Bedrock: {error_message}, Claude: {fallback_error}")
         
     except json.JSONDecodeError as e:
         print(f"⚠️  Bedrock JSON parsing failed: {e}")
@@ -295,6 +285,8 @@ def extract_farmer_intent(farmer_query: str) -> dict:
             raise Exception(f"Failed to parse JSON from both Bedrock and Claude API. Bedrock response: {response_text}")
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"⚠️  Bedrock initialization/request failed: {e}")
         print("   → Trying Claude API fallback...")
         

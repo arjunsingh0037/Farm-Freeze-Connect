@@ -54,12 +54,19 @@ class VoiceService:
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key
             )
+            self.translate_client = boto3.client(
+                'translate',
+                region_name=self.region,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key
+            )
             print("✅ AWS clients initialized successfully")
         except Exception as e:
             print(f"Warning: AWS clients initialization failed: {e}")
             self.transcribe_client = None
             self.s3_client = None
             self.polly_client = None
+            self.translate_client = None
     
     def upload_audio_to_s3(self, audio_file_path: str, object_key: str) -> str:
         """
@@ -181,6 +188,31 @@ class VoiceService:
         except:
             return []
     
+
+
+    def translate_text(self, text: str, source_lang: str = "hi", target_lang: str = "en") -> str:
+        """Translate text using Amazon Translate"""
+        if not self.translate_client:
+            return text  # Return original if client not available
+            
+        try:
+            # Handle cases where language code might have region (e.g. hi-IN)
+            source_lang_code = source_lang.split('-')[0]
+            
+            # If already English, don't translate
+            if source_lang_code == 'en':
+                return text
+                
+            response = self.translate_client.translate_text(
+                Text=text,
+                SourceLanguageCode=source_lang_code,
+                TargetLanguageCode=target_lang
+            )
+            return response.get('TranslatedText', text)
+        except Exception as e:
+            print(f"Translation failed: {e}")
+            return text
+
     def transcribe_audio_file(self, audio_file_path: str, language_code: str = "hi-IN") -> Dict[str, Any]:
         """
         Complete transcription workflow for audio file
@@ -193,8 +225,7 @@ class VoiceService:
             Transcription result
         """
         if not self.transcribe_client or not self.s3_client:
-            # Return mock data for development
-            return self._get_mock_transcription(audio_file_path)
+            raise Exception("AWS Transcribe or S3 client not initialized. Check credentials.")
         
         try:
             # Generate unique identifiers
@@ -209,6 +240,14 @@ class VoiceService:
             
             # Get result
             result = self.get_transcription_result(job_name)
+            
+            # Translate to English if needed
+            if result['status'] == 'completed':
+                original_text = result['transcript']
+                translated_text = self.translate_text(original_text, source_lang=language_code)
+                result['original_transcript'] = original_text
+                result['transcript'] = translated_text
+                result['language_detected'] = language_code
             
             # Cleanup S3 object (optional)
             try:
@@ -247,31 +286,6 @@ class VoiceService:
             except:
                 pass
     
-    def _get_mock_transcription(self, audio_file_path: str) -> Dict[str, Any]:
-        """Return mock transcription for development/testing"""
-        
-        # Simple mock based on file name or return generic
-        mock_transcripts = [
-            "मुझे 100 किलो टमाटर स्टोर करना है कल से",
-            "I need to store 50 kg potatoes from tomorrow",
-            "मुझे 200 किलो प्याज के लिए कोल्ड स्टोरेज चाहिए आज से",
-            "Need cold storage for 150 kg tomatoes starting today",
-            "मुझे आलू के लिए स्टोरेज चाहिए 75 किलो"
-        ]
-        
-        # Use a simple hash to pick consistent mock data
-        import hashlib
-        file_hash = hashlib.md5(audio_file_path.encode()).hexdigest()
-        mock_index = int(file_hash[:2], 16) % len(mock_transcripts)
-        
-        return {
-            'status': 'completed',
-            'transcript': mock_transcripts[mock_index],
-            'confidence': 0.85,
-            'alternatives': [mock_transcripts[mock_index]],
-            'mock': True
-        }
-
     def generate_voice_recommendation(self, text: str, language_code: str = "hi-IN") -> bytes:
         """
         Generate voice recommendation using Amazon Polly
@@ -284,8 +298,7 @@ class VoiceService:
             Audio bytes
         """
         if not self.polly_client:
-            # Return mock audio for development
-            return self._get_mock_audio()
+            raise Exception("AWS Polly client not initialized. Check your credentials.")
         
         try:
             # Map language codes to Polly voice IDs
@@ -310,153 +323,7 @@ class VoiceService:
             
         except Exception as e:
             raise Exception(f"Voice generation failed: {str(e)}")
-    def store_voice_input_s3(self, audio_bytes: bytes, farmer_info: dict, language_code: str = "hi-IN") -> dict:
-        """
-        Store voice input in S3 bucket with metadata
 
-        Args:
-            audio_bytes: Audio data as bytes
-            farmer_info: Dictionary with farmer details (name, phone, etc.)
-            language_code: Language code
-
-        Returns:
-            Dictionary with S3 storage information
-        """
-        try:
-            # Generate unique filename with timestamp and farmer info
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            farmer_name = farmer_info.get('name', 'unknown').replace(' ', '_')
-            farmer_phone = farmer_info.get('phone', 'unknown')
-
-            # Create structured S3 key
-            s3_key = f"voice-inputs/{timestamp}_{farmer_name}_{farmer_phone[-4:]}_{language_code}.wav"
-
-            if not self.s3_client:
-                # Mock storage for development
-                return {
-                    'stored': True,
-                    's3_key': s3_key,
-                    's3_uri': f"s3://{self.s3_bucket}/{s3_key}",
-                    'bucket': self.s3_bucket,
-                    'size_bytes': len(audio_bytes),
-                    'timestamp': timestamp,
-                    'mock': True
-                }
-
-            # Save bytes to temporary file first
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                temp_file.write(audio_bytes)
-                temp_file_path = temp_file.name
-
-            try:
-                # Upload to S3 with metadata
-                self.s3_client.upload_file(
-                    temp_file_path,
-                    self.s3_bucket,
-                    s3_key,
-                    ExtraArgs={
-                        'Metadata': {
-                            'farmer-name': farmer_info.get('name', 'unknown'),
-                            'farmer-phone': farmer_info.get('phone', 'unknown'),
-                            'language-code': language_code,
-                            'upload-timestamp': timestamp,
-                            'content-type': 'audio/wav'
-                        },
-                        'ContentType': 'audio/wav'
-                    }
-                )
-
-                return {
-                    'stored': True,
-                    's3_key': s3_key,
-                    's3_uri': f"s3://{self.s3_bucket}/{s3_key}",
-                    'bucket': self.s3_bucket,
-                    'size_bytes': len(audio_bytes),
-                    'timestamp': timestamp,
-                    'mock': False
-                }
-
-            finally:
-                # Cleanup temporary file
-                try:
-                    os.unlink(temp_file_path)
-                except:
-                    pass
-
-        except Exception as e:
-            raise Exception(f"Failed to store voice input in S3: {str(e)}")
-
-    def list_stored_voice_inputs(self, farmer_phone: str = None, limit: int = 10) -> list:
-        """
-        List stored voice inputs from S3
-
-        Args:
-            farmer_phone: Filter by farmer phone (optional)
-            limit: Maximum number of results
-
-        Returns:
-            List of stored voice input metadata
-        """
-        if not self.s3_client:
-            # Return mock data for development
-            return [
-                {
-                    's3_key': 'voice-inputs/20260304_120000_farmer_9999_hi-IN.wav',
-                    'size': 1024,
-                    'last_modified': '2026-03-04T12:00:00Z',
-                    'farmer_info': 'farmer_9999',
-                    'mock': True
-                }
-            ]
-
-        try:
-            # List objects in the voice-inputs folder
-            response = self.s3_client.list_objects_v2(
-                Bucket=self.s3_bucket,
-                Prefix='voice-inputs/',
-                MaxKeys=limit
-            )
-
-            voice_inputs = []
-            for obj in response.get('Contents', []):
-                s3_key = obj['Key']
-
-                # Filter by farmer phone if specified
-                if farmer_phone and farmer_phone[-4:] not in s3_key:
-                    continue
-
-                # Get object metadata
-                try:
-                    metadata_response = self.s3_client.head_object(
-                        Bucket=self.s3_bucket,
-                        Key=s3_key
-                    )
-                    metadata = metadata_response.get('Metadata', {})
-                except:
-                    metadata = {}
-
-                voice_inputs.append({
-                    's3_key': s3_key,
-                    's3_uri': f"s3://{self.s3_bucket}/{s3_key}",
-                    'size': obj['Size'],
-                    'last_modified': obj['LastModified'].isoformat(),
-                    'farmer_name': metadata.get('farmer-name', 'unknown'),
-                    'farmer_phone': metadata.get('farmer-phone', 'unknown'),
-                    'language_code': metadata.get('language-code', 'unknown'),
-                    'upload_timestamp': metadata.get('upload-timestamp', 'unknown'),
-                    'mock': False
-                })
-
-            return voice_inputs
-
-        except Exception as e:
-            raise Exception(f"Failed to list voice inputs from S3: {str(e)}")
-    
-    def _get_mock_audio(self) -> bytes:
-        """Return mock audio bytes for development"""
-        # Return a minimal MP3 header (silent audio)
-        return b'\xff\xfb\x90\x00' + b'\x00' * 100
-    
     def generate_missing_field_prompt(self, missing_fields: list, language_code: str = "hi-IN") -> str:
         """
         Generate appropriate prompt text for missing fields
@@ -471,30 +338,34 @@ class VoiceService:
         if language_code.startswith("hi"):
             # Hindi prompts
             field_prompts = {
-                "crop": "कृपया बताएं कि आप कौन सी फसल स्टोर करना चाहते हैं?",
-                "quantity": "कृपया बताएं कि आप कितनी मात्रा में फसल स्टोर करना चाहते हैं?",
-                "time": "कृपया बताएं कि आप कब से स्टोरेज शुरू करना चाहते हैं?",
-                "location": "कृपया अपना स्थान बताएं।"
+                "crop": "आप कौन सी फसल स्टोर करना चाहते हैं?",
+                "quantity": "आप कितनी मात्रा में स्टोर करना चाहते हैं?",
+                "time": "आप कब से स्टोरेज शुरू करना चाहते हैं?",
+                "location": "आपका स्थान क्या है?",
+                "duration": "आप कितने दिनों के लिए स्टोर करना चाहते हैं?"
             }
             
             if len(missing_fields) == 1:
-                return field_prompts.get(missing_fields[0], "कृपया अधिक जानकारी दें।")
+                return f"कृपया बताएं, {field_prompts.get(missing_fields[0], 'अधिक जानकारी दें।')}"
             else:
-                return f"कृपया निम्नलिखित जानकारी दें: {', '.join(missing_fields)}"
+                missing_text = ", ".join([field_prompts.get(f, f) for f in missing_fields])
+                return f"कृपया निम्नलिखित जानकारी दें: {missing_text}"
         
         else:
             # English prompts
             field_prompts = {
-                "crop": "Please tell me which crop you want to store?",
-                "quantity": "Please tell me how much quantity you want to store?",
-                "time": "Please tell me when you want to start storage?",
-                "location": "Please provide your location."
+                "crop": "which crop you want to store?",
+                "quantity": "how much quantity you want to store?",
+                "time": "when you want to start storage?",
+                "location": "your location?",
+                "duration": "for how many days you want to store?"
             }
             
             if len(missing_fields) == 1:
-                return field_prompts.get(missing_fields[0], "Please provide more information.")
+                return f"Please tell me, {field_prompts.get(missing_fields[0], 'provide more information.')}"
             else:
-                return f"Please provide the following information: {', '.join(missing_fields)}"
+                missing_text = ", ".join([field_prompts.get(f, f) for f in missing_fields])
+                return f"Please provide the following information: {missing_text}"
 
     def store_voice_input_s3(self, audio_bytes: bytes, farmer_info: dict, language_code: str = "hi-IN") -> dict:
         """
@@ -518,16 +389,7 @@ class VoiceService:
             s3_key = f"voice-inputs/{timestamp}_{farmer_name}_{farmer_phone[-4:]}_{language_code}.wav"
             
             if not self.s3_client:
-                # Mock storage for development
-                return {
-                    'stored': True,
-                    's3_key': s3_key,
-                    's3_uri': f"s3://{self.s3_bucket}/{s3_key}",
-                    'bucket': self.s3_bucket,
-                    'size_bytes': len(audio_bytes),
-                    'timestamp': timestamp,
-                    'mock': True
-                }
+                raise Exception("AWS S3 client not initialized. Check your credentials.")
             
             # Save bytes to temporary file first
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
@@ -558,8 +420,7 @@ class VoiceService:
                     's3_uri': f"s3://{self.s3_bucket}/{s3_key}",
                     'bucket': self.s3_bucket,
                     'size_bytes': len(audio_bytes),
-                    'timestamp': timestamp,
-                    'mock': False
+                    'timestamp': timestamp
                 }
                 
             finally:
@@ -584,16 +445,7 @@ class VoiceService:
             List of stored voice input metadata
         """
         if not self.s3_client:
-            # Return mock data for development
-            return [
-                {
-                    's3_key': 'voice-inputs/20260304_120000_farmer_9999_hi-IN.wav',
-                    'size': 1024,
-                    'last_modified': '2026-03-04T12:00:00Z',
-                    'farmer_info': 'farmer_9999',
-                    'mock': True
-                }
-            ]
+            raise Exception("AWS S3 client not initialized. Check your credentials.")
         
         try:
             # List objects in the voice-inputs folder
@@ -629,8 +481,7 @@ class VoiceService:
                     'farmer_name': metadata.get('farmer-name', 'unknown'),
                     'farmer_phone': metadata.get('farmer-phone', 'unknown'),
                     'language_code': metadata.get('language-code', 'unknown'),
-                    'upload_timestamp': metadata.get('upload-timestamp', 'unknown'),
-                    'mock': False
+                    'upload_timestamp': metadata.get('upload-timestamp', 'unknown')
                 })
             
             return voice_inputs
@@ -638,6 +489,31 @@ class VoiceService:
         except Exception as e:
             raise Exception(f"Failed to list voice inputs from S3: {str(e)}")
 
+
+    def store_recommendation_audio_s3(self, audio_bytes: bytes, language_code: str) -> str:
+        """Store Polly generated recommendation in S3"""
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            s3_key = f"recommendations/rec_{timestamp}_{language_code}.mp3"
+            
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file_path = temp_file.name
+                
+            try:
+                self.s3_client.upload_file(
+                    temp_file_path,
+                    self.s3_bucket,
+                    s3_key,
+                    ExtraArgs={'ContentType': 'audio/mpeg'}
+                )
+                return f"s3://{self.s3_bucket}/{s3_key}"
+            finally:
+                if os.path.exists(temp_file_path):
+                    os.unlink(temp_file_path)
+        except Exception as e:
+            print(f"Failed to store recommendation in S3: {e}")
+            return ""
 
 # Global voice service instance
 voice_service = VoiceService()

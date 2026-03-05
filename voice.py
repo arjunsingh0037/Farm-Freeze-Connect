@@ -30,9 +30,29 @@ class VoiceBooking:
         self.api_url = "http://localhost:8000/api/voice/enhanced-book"
         self.farmer_name = "Voice User"
         self.farmer_phone = "+919999999999"
+        self.farmer_lat = 28.6139  # Default Delhi
+        self.farmer_lng = 77.2090
         self.language = "hi-IN"
         self.sample_rate = 16000
+        self.auto_detect_location = True  # New setting
     
+    def get_real_location(self):
+        """Get real-time location based on IP address as a fallback for terminal apps"""
+        try:
+            print("📍 Detecting your real-time location...")
+            response = requests.get('https://ipapi.co/json/', timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                self.farmer_lat = float(data.get('latitude', 28.6139))
+                self.farmer_lng = float(data.get('longitude', 77.2090))
+                city = data.get('city', 'Unknown')
+                region = data.get('region', 'Unknown')
+                print(f"✅ Location detected: {city}, {region} ({self.farmer_lat}, {self.farmer_lng})")
+            else:
+                print("⚠️  Could not detect real-time location, using default (Delhi).")
+        except Exception as e:
+            print(f"⚠️  Location detection failed: {e}. Using default (Delhi).")
+
     def record_voice_live(self, duration=10):
         """Record voice in real-time from terminal"""
         if not AUDIO_AVAILABLE:
@@ -70,12 +90,16 @@ class VoiceBooking:
             print(f"❌ Recording failed: {e}")
             return None
     
-    def process_voice(self, audio_file=None):
+    def process_voice(self, audio_file=None, confirmed=False):
         """Process voice input for booking"""
         if not REQUESTS_AVAILABLE:
             print("❌ Requests library not available")
             print("Install: pip install requests")
             return
+            
+        # Auto-detect location if enabled
+        if self.auto_detect_location and not confirmed:
+            self.get_real_location()
             
         if not audio_file:
             # Record new audio
@@ -83,30 +107,45 @@ class VoiceBooking:
             if not audio_file:
                 return
         
-        print("📤 Processing voice...")
+        if not confirmed:
+            print("📤 Processing voice and finding best cold storage...")
+        else:
+            print("📤 Finalizing your booking...")
         
         try:
             with open(audio_file, 'rb') as f:
-                files = {'audio_file': f}
+                # Prepare multipart/form-data
+                files = {'audio_file': (os.path.basename(audio_file), f, 'audio/wav')}
                 data = {
                     'farmer_name': self.farmer_name,
                     'farmer_phone': self.farmer_phone,
+                    'farmer_lat': str(self.farmer_lat),
+                    'farmer_lng': str(self.farmer_lng),
                     'language_code': self.language,
-                    'store_in_s3': 'true'
+                    'store_in_s3': 'true',
+                    'confirmed': 'true' if confirmed else 'false'
                 }
                 
-                response = requests.post(self.api_url, files=files, data=data, timeout=30)
+                response = requests.post(self.api_url, files=files, data=data, timeout=60)
             
             if response.status_code == 200:
                 result = response.json()
-                self.show_result(result)
+                
+                # If this was a preview and successful, ask for agreement
+                if not confirmed and result.get('success') and result.get('booking') and not result.get('requires_more_info'):
+                    self.show_result(result, preview=True)
+                    agree = input("\n🤝 Do you AGREE to book this storage? (yes/no): ").strip().lower()
+                    if agree in ['yes', 'y', 'haan']:
+                        # Call again with confirmed=True
+                        self.process_voice(audio_file, confirmed=True)
+                    else:
+                        print("❌ Booking cancelled by user.")
+                else:
+                    self.show_result(result, preview=confirmed)
             else:
                 print(f"❌ Server error: {response.status_code}")
-                print("Make sure server is running: .\\start.bat")
+                print(f"Details: {response.text}")
                 
-        except requests.exceptions.ConnectionError:
-            print("❌ Server not running!")
-            print("Start server: .\\start.bat")
         except Exception as e:
             print(f"❌ Error: {e}")
         finally:
@@ -117,10 +156,13 @@ class VoiceBooking:
                 except:
                     pass
     
-    def show_result(self, result):
+    def show_result(self, result, preview=False):
         """Show booking result"""
         print("\n" + "="*50)
-        print("📊 VOICE BOOKING RESULT")
+        if preview:
+            print("📋 BOOKING PREVIEW (Confirmation Required)")
+        else:
+            print("📊 VOICE BOOKING RESULT")
         print("="*50)
         
         # Transcription
@@ -148,9 +190,12 @@ class VoiceBooking:
             print(f"⚠️  Missing: {', '.join(missing)}")
             
             if result.get('recommendation'):
-                rec = result['recommendation']['recommendation_text']
-                print(f"💡 Please provide: {rec}")
-                print("🔄 Try recording again with complete information")
+                rec = result['recommendation']
+                print(f"💡 Please provide: {rec['recommendation_text']}")
+                
+                if rec.get('audio_available') and rec.get('audio_uri'):
+                    print(f"🔊 Voice guidance available: {rec['audio_uri']}")
+                    print("🔄 Try recording again with complete information")
         
         # Successful Booking
         elif result.get('success') and result.get('booking'):
@@ -206,12 +251,17 @@ class VoiceBooking:
         print(f"   Name: {self.farmer_name}")
         print(f"   Phone: {self.farmer_phone}")
         print(f"   Language: {self.language}")
+        print(f"   Location: {self.farmer_lat}, {self.farmer_lng}")
+        print(f"   Auto-detect Location: {'Enabled' if self.auto_detect_location else 'Disabled'}")
         print("\n1. Change name")
         print("2. Change phone")
         print("3. Change language")
-        print("4. Back")
+        print("4. Change location (lat, lng)")
+        print("5. Refresh real-time location")
+        print("6. Toggle auto-detect location")
+        print("7. Back")
         
-        choice = input("Select (1-4): ").strip()
+        choice = input("Select (1-7): ").strip()
         
         if choice == '1':
             name = input("Enter name: ").strip()
@@ -230,11 +280,30 @@ class VoiceBooking:
             if lang_choice in lang_map:
                 self.language = lang_map[lang_choice]
                 print(f"✅ Language updated: {self.language}")
+        elif choice == '4':
+            try:
+                lat = float(input("Enter latitude: ").strip())
+                lng = float(input("Enter longitude: ").strip())
+                self.farmer_lat = lat
+                self.farmer_lng = lng
+                self.auto_detect_location = False  # Disable auto-detect if manual override
+                print(f"✅ Location updated: {self.farmer_lat}, {self.farmer_lng}")
+                print("⚠️  Auto-detect location disabled for manual override.")
+            except ValueError:
+                print("❌ Invalid input")
+        elif choice == '5':
+            self.get_real_location()
+        elif choice == '6':
+            self.auto_detect_location = not self.auto_detect_location
+            print(f"✅ Auto-detect location: {'Enabled' if self.auto_detect_location else 'Disabled'}")
     
     def run(self):
         """Main function"""
         print("🎤 FarmFreeze Voice Booking")
         print("="*30)
+        
+        # Get real-time location on startup
+        self.get_real_location()
         
         # Check if file provided as argument
         if len(sys.argv) > 1:
