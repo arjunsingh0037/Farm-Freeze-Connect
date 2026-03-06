@@ -19,9 +19,6 @@ def extract_farmer_intent_claude_api(farmer_query: str) -> dict:
     Returns:
         dict: A dictionary containing the structured intent data.
     """
-    from dotenv import load_dotenv
-    load_dotenv()
-    
     # Get Claude API key from environment
     claude_api_key = os.environ.get("CLAUDE_API_KEY")
     
@@ -143,10 +140,6 @@ def extract_farmer_intent(farmer_query: str) -> dict:
     Raises:
         Exception: If both Bedrock and Claude API fail or responses are not valid JSON.
     """
-    
-    # Load environment variables
-    from dotenv import load_dotenv
-    load_dotenv()
     
     # Configuration
     model_id = "anthropic.claude-3-haiku-20240307-v1:0"
@@ -285,8 +278,6 @@ def extract_farmer_intent(farmer_query: str) -> dict:
             raise Exception(f"Failed to parse JSON from both Bedrock and Claude API. Bedrock response: {response_text}")
     
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         print(f"⚠️  Bedrock initialization/request failed: {e}")
         print("   → Trying Claude API fallback...")
         

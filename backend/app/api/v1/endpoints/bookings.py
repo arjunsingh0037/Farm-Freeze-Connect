@@ -12,6 +12,7 @@ from ....notification_service import notification_service
 router = APIRouter()
 
 @router.post("/", response_model=BookingResponse)
+@router.post("/book", response_model=BookingResponse)
 def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
     # Find or create farmer
     farmer = db.query(Farmer).filter(Farmer.phone == booking.farmer_phone).first()

@@ -16,12 +16,12 @@ from ....schemas import (
 )
 from ....voice_service import voice_service
 from ....ai_service import extract_farmer_intent
-from .ai import ai_query, ai_book
+from .ai import ai_query, ai_book as ai_book_internal
 
 router = APIRouter()
 
 @router.post("/transcribe", response_model=VoiceTranscriptionResponse)
-async def transcribe_voice(
+def transcribe_voice(
     audio_file: UploadFile = File(...),
     language_code: str = "hi-IN"
 ):
@@ -32,7 +32,8 @@ async def transcribe_voice(
         raise HTTPException(status_code=400, detail="File must be an audio file")
     
     try:
-        audio_content = await audio_file.read()
+        # We need to read the file content synchronously in a regular def function
+        audio_content = audio_file.file.read()
         result = voice_service.transcribe_audio_bytes(audio_content, language_code)
         
         processing_time = int((time.time() - start_time) * 1000)
@@ -48,7 +49,8 @@ async def transcribe_voice(
         raise HTTPException(status_code=500, detail=f"Voice transcription failed: {str(e)}")
 
 @router.post("/query")
-async def voice_query(
+@router.post("/voice-query")
+def voice_query(
     audio_file: UploadFile = File(...),
     farmer_lat: float = Form(...),
     farmer_lng: float = Form(...),
@@ -59,7 +61,7 @@ async def voice_query(
 ):
     """Complete voice-to-storage-search workflow."""
     try:
-        audio_content = await audio_file.read()
+        audio_content = audio_file.file.read()
         transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
         
         if transcription_result['status'] != 'completed':
@@ -91,7 +93,8 @@ async def voice_query(
         raise HTTPException(status_code=500, detail=f"Voice query processing failed: {str(e)}")
 
 @router.post("/book", response_model=VoiceBookingResponse)
-async def voice_book(
+@router.post("/voice-book", response_model=VoiceBookingResponse)
+def voice_book(
     audio_file: UploadFile = File(...),
     farmer_lat: float = Form(...),
     farmer_lng: float = Form(...),
@@ -104,7 +107,7 @@ async def voice_book(
     start_time = time.time()
     
     try:
-        audio_content = await audio_file.read()
+        audio_content = audio_file.file.read()
         transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
         
         if transcription_result['status'] != 'completed':
@@ -126,7 +129,7 @@ async def voice_book(
             farmer_phone=farmer_phone
         )
         
-        booking_result = ai_book(ai_request, db)
+        booking_result = ai_book_internal(ai_request, db)
         
         processing_time = int((time.time() - start_time) * 1000)
         
@@ -147,8 +150,6 @@ async def voice_book(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Voice booking failed: {str(e)}")
 
 @router.post("/test")
@@ -174,7 +175,7 @@ async def test_voice_service():
         }
 
 @router.post("/smart-book", response_model=SmartVoiceBookingResponse)
-async def smart_voice_book(
+def smart_voice_book(
     audio_file: UploadFile = File(...),
     farmer_lat: float = Form(...),
     farmer_lng: float = Form(...),
@@ -187,7 +188,7 @@ async def smart_voice_book(
     start_time = time.time()
     
     try:
-        audio_content = await audio_file.read()
+        audio_content = audio_file.file.read()
         transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
         
         if transcription_result['status'] != 'completed':
@@ -259,7 +260,7 @@ async def smart_voice_book(
                 requires_more_info=False
             )
         
-        booking_result = ai_book(ai_request, db)
+        booking_result = ai_book_internal(ai_request, db)
         
         return SmartVoiceBookingResponse(
             transcription=VoiceTranscriptionResponse(
@@ -280,7 +281,7 @@ async def smart_voice_book(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/recommendation-audio")
-async def get_recommendation_audio(
+def get_recommendation_audio(
     missing_fields: List[str],
     language_code: str = "hi-IN"
 ):
@@ -301,7 +302,7 @@ async def get_recommendation_audio(
         raise HTTPException(status_code=500, detail=f"Voice recommendation generation failed: {str(e)}")
 
 @router.post("/enhanced-book", response_model=EnhancedVoiceBookingResponse)
-async def enhanced_voice_book(
+def enhanced_voice_book(
     audio_file: UploadFile = File(...),
     farmer_lat: float = Form(...),
     farmer_lng: float = Form(...),
@@ -316,7 +317,7 @@ async def enhanced_voice_book(
     start_time = time.time()
     
     try:
-        audio_content = await audio_file.read()
+        audio_content = audio_file.file.read()
         
         voice_storage_info = None
         if store_in_s3:
@@ -436,7 +437,7 @@ async def enhanced_voice_book(
                 requires_more_info=False
             )
 
-        booking_result = ai_book(ai_request, db)
+        booking_result = ai_book_internal(ai_request, db)
         
         return EnhancedVoiceBookingResponse(
             transcription=VoiceTranscriptionResponse(

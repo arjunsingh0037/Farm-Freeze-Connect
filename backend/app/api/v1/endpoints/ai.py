@@ -17,6 +17,7 @@ from .bookings import create_booking
 router = APIRouter()
 
 @router.post("/text-query", response_model=QueryResponse)
+@router.post("/query", response_model=QueryResponse)
 def text_query(request: TextQueryRequest, db: Session = Depends(get_db)):
     """Direct text flow: AI extracts intent and searches for cold storage."""
     try:
@@ -83,7 +84,7 @@ def text_query(request: TextQueryRequest, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/query", response_model=AIQueryResponse)
+@router.post("/query-ai", response_model=AIQueryResponse)
 def ai_query(request: AIQueryRequest, db: Session = Depends(get_db)):
     """Process natural language query from farmer using AI."""
     try:
@@ -162,7 +163,7 @@ def ai_query(request: AIQueryRequest, db: Session = Depends(get_db)):
             booking_suggestion = {
                 "cold_storage_id": closest.storage_id,
                 "cold_storage_name": closest.storage_name,
-                "quantity_kg": quantity_kg,
+                "quantity": quantity_kg,
                 "booking_date": str(start_date),
                 "duration_days": duration_days,
                 "total_cost": closest.total_cost,
@@ -177,11 +178,9 @@ def ai_query(request: AIQueryRequest, db: Session = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"AI query failed: {str(e)}")
 
-@router.post("/book")
+@router.post("/book-ai")
 def ai_book(request: AIQueryRequest, db: Session = Depends(get_db)):
     """Complete AI-powered booking flow."""
     if not request.farmer_name or not request.farmer_phone:
@@ -236,7 +235,7 @@ def ai_book(request: AIQueryRequest, db: Session = Depends(get_db)):
             "booking": {
                 "booking_reference": booking.booking_reference,
                 "cold_storage_name": booking.cold_storage_name,
-                "quantity_kg": booking.quantity_kg,
+                "quantity": booking.quantity_kg,
                 "booking_date": str(booking.booking_date),
                 "duration_days": booking.duration_days,
                 "total_cost": booking.total_cost,
@@ -246,6 +245,4 @@ def ai_book(request: AIQueryRequest, db: Session = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"AI booking failed: {str(e)}")

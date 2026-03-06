@@ -7,6 +7,7 @@ import json
 import time
 import uuid
 import os
+from dotenv import load_dotenv
 from botocore.exceptions import ClientError
 from typing import Optional, Dict, Any
 import tempfile
@@ -17,12 +18,9 @@ class VoiceService:
     """Service for handling voice input and transcription"""
     
     def __init__(self):
+        load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
         self.region = os.environ.get("AWS_REGION", "us-east-1")
         self.s3_bucket = os.environ.get("S3_BUCKET_NAME", "farmfreeze-voice-uploads")
-        
-        # Load environment variables from .env file
-        from dotenv import load_dotenv
-        load_dotenv()
         
         # Initialize AWS clients
         try:
@@ -117,7 +115,7 @@ class VoiceService:
         except Exception as e:
             raise Exception(f"Failed to start transcription job: {str(e)}")
     
-    def get_transcription_result(self, job_name: str, max_wait_time: int = 60) -> Dict[str, Any]:
+    def get_transcription_result(self, job_name: str, max_wait_time: int = 120) -> Dict[str, Any]:
         """
         Get transcription result (with polling)
         
@@ -514,6 +512,16 @@ class VoiceService:
         except Exception as e:
             print(f"Failed to store recommendation in S3: {e}")
             return ""
+
+    def _get_mock_transcription(self, audio_path: str) -> dict:
+        """Return a mock transcription for testing purposes"""
+        return {
+            "status": "completed",
+            "transcript": "I want to store 500kg of apples",
+            "confidence": 0.95,
+            "alternatives": ["I want to store 500 kg of apple", "storage for 500kg apples"],
+            "language_detected": "en-US"
+        }
 
 # Global voice service instance
 voice_service = VoiceService()

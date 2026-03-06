@@ -31,11 +31,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API router
+# Include API routers
 app.include_router(api_router, prefix="/api/v1")
-# Support old paths for backward compatibility if needed, or redirect
-app.include_router(api_router, prefix="/api") # For paths like /api/bookings
-app.include_router(api_router) # For paths like /text-query
+app.include_router(api_router, prefix="/api")
+
+# Explicit root-level routes for the exact prompt requirements (POST /query and POST /book)
+from .api.v1.endpoints.ai import router as ai_router
+from .api.v1.endpoints.bookings import router as booking_router
+
+# These allow for POST /query and POST /book directly as requested
+app.include_router(ai_router, tags=["root-ai"])
+app.include_router(booking_router, tags=["root-bookings"])
 
 @app.get("/")
 def root():
@@ -47,4 +53,6 @@ def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=True)
+    # Use "app.main:app" if running from the "backend" directory
+    # Use "backend.app.main:app" if running from the root directory
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
