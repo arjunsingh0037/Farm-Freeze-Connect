@@ -19,12 +19,15 @@ router = APIRouter()
 @router.post("/text-query", response_model=QueryResponse)
 @router.post("/query", response_model=QueryResponse)
 def text_query(request: TextQueryRequest, db: Session = Depends(get_db)):
-    """Direct text flow: AI extracts intent and searches for cold storage."""
+    """Direct text flow: AI extracts intent and searches for cold storage using robust availability check."""
     try:
-        # Step 1-2: AI Intent Extraction
+        # Use the same logic as ai_query via a shared helper or just by calling it if schemas matched
+        # Here we reimplement the robust logic for the legacy endpoint
+        
+        # 1. AI Intent Extraction
         intent = extract_farmer_intent(request.query)
         
-        # Log Interaction for Analytics
+        # Log Interaction
         interaction = InteractionLog(
             interaction_type="text",
             query_text=request.query,
@@ -35,52 +38,84 @@ def text_query(request: TextQueryRequest, db: Session = Depends(get_db)):
         db.add(interaction)
         db.commit()
         
-        # Step 3: Query RDS
-        storages = db.query(ColdStorage).all()
-        
-        # Step 4: Rank and Process
-        results = []
-        crop = intent.get('crop', '').lower()
-        quantity_kg = intent.get('quantity', 0)
-        if intent.get('unit') == 'ton':
+        # 2. Parse Intent
+        quantity_kg = intent.get("quantity", 0)
+        if intent.get("unit") == "ton":
             quantity_kg *= 1000
             
+        time_str = intent.get("time", "today").lower()
+        if time_str in ["today", "aaj"]:
+            start_date = date.today()
+        elif time_str in ["tomorrow", "kal"]:
+            start_date = date.today() + timedelta(days=1)
+        else:
+            start_date = date.today() + timedelta(days=2)
+            
+        storage_type = intent.get("storage_type", "short-term")
+        duration_map = {"short-term": 7, "medium-term": 30, "long-term": 90}
+        duration_days = duration_map.get(storage_type, 7)
+        crop_type = intent.get("crop", "")
+
+        # 3. Search Database with Availability Check
+        storages = db.query(ColdStorage).all()
+        results = []
+        
         for storage in storages:
             distance = calculate_distance(
-                request.lat, request.lng, 
+                request.lat, request.lng,
                 storage.location_lat, storage.location_lng
             )
             
-            # Filter within 50km
             if distance > 50.0:
                 continue
             
-            # Basic filtering for crop support
-            supported = storage.supported_crops.lower()
-            if supported != 'all' and crop and crop not in supported:
-                continue
-                
-            # Pricing
-            price_kg = storage.price_per_kg_per_day
-            price_ton = price_kg * 1000
-            total_cost = price_kg * quantity_kg
+            supported_crops = storage.supported_crops.lower()
+            if supported_crops != "all" and crop_type:
+                if crop_type.lower() not in supported_crops:
+                    continue
             
-            results.append(StorageResult(
-                id=str(storage.id),
-                name=storage.name,
-                address=storage.address,
-                distance_km=round(distance, 2),
-                price_per_kg=price_kg,
-                price_per_ton=price_ton,
-                total_cost=round(total_cost, 2),
-                available_capacity_kg=storage.total_capacity_kg,
-                supported_crops=storage.supported_crops,
-                urgency=intent.get('urgency', 'medium'),
-                storage_type=intent.get('storage_type', 'short-term')
-            ))
+            # Check Daily Capacity
+            has_capacity = True
+            for i in range(duration_days):
+                check_date = start_date + timedelta(days=i)
+                daily_record = db.query(DailyCapacity).filter(
+                    DailyCapacity.cold_storage_id == storage.id,
+                    DailyCapacity.usage_date == check_date
+                ).first()
+                
+                used = daily_record.used_capacity_kg if daily_record else 0.0
+                available = storage.total_capacity_kg - used
+                
+                if available < quantity_kg:
+                    has_capacity = False
+                    break
+            
+            if has_capacity:
+                total_cost = quantity_kg * storage.price_per_kg_per_day * duration_days
+                # Get current day availability for display
+                current_record = db.query(DailyCapacity).filter(
+                    DailyCapacity.cold_storage_id == storage.id,
+                    DailyCapacity.usage_date == start_date
+                ).first()
+                avail_display = storage.total_capacity_kg - (current_record.used_capacity_kg if current_record else 0.0)
+                
+                results.append(StorageResult(
+                    id=str(storage.id),
+                    name=storage.name,
+                    address=storage.address,
+                    distance_km=round(distance, 2),
+                    price_per_kg=storage.price_per_kg_per_day,
+                    price_per_ton=storage.price_per_kg_per_day * 1000,
+                    total_cost=round(total_cost, 2),
+                    available_capacity_kg=avail_display,
+                    supported_crops=storage.supported_crops,
+                    urgency=intent.get('urgency', 'medium'),
+                    storage_type=storage_type
+                ))
         
         results.sort(key=lambda x: x.distance_km)
         return QueryResponse(intent=intent, results=results[:5])
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

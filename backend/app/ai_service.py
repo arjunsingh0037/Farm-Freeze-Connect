@@ -152,7 +152,8 @@ def extract_farmer_intent(farmer_query: str) -> dict:
         
         if not aws_access_key_id or not aws_secret_access_key:
             print("⚠️  AWS credentials not found, trying Claude API fallback...")
-            return extract_farmer_intent_claude_api(farmer_query)
+            # return extract_farmer_intent_claude_api(farmer_query)
+            raise Exception("AWS credentials missing") # Force fallback logic below
         
         bedrock_runtime = boto3.client(
             service_name="bedrock-runtime",
@@ -249,40 +250,14 @@ def extract_farmer_intent(farmer_query: str) -> dict:
         print("✅ AWS Bedrock successful")
         return intent_data
 
-    except ClientError as e:
+    except Exception as e:
         error_message = str(e)
         print(f"⚠️  AWS Bedrock failed: {error_message}")
         
-        if "AccessDeniedException" in error_message and "INVALID_PAYMENT_INSTRUMENT" in error_message:
-            print("   → Payment method issue, trying Claude API fallback...")
-        elif "Model use case details have not been submitted" in error_message:
-            print("   → Use case details not submitted, trying Claude API fallback...")
-        else:
-            print("   → Bedrock error, trying Claude API fallback...")
-        
-        # Try Claude API fallback
+        # Try Claude API fallback as the last legitimate AI service
         try:
             return extract_farmer_intent_claude_api(farmer_query)
         except Exception as fallback_error:
             print(f"❌ Claude API fallback also failed: {fallback_error}")
-            raise Exception(f"Both Bedrock and Claude API failed. Bedrock: {error_message}, Claude: {fallback_error}")
-        
-    except json.JSONDecodeError as e:
-        print(f"⚠️  Bedrock JSON parsing failed: {e}")
-        print("   → Trying Claude API fallback...")
-        
-        try:
-            return extract_farmer_intent_claude_api(farmer_query)
-        except Exception as fallback_error:
-            print(f"❌ Claude API fallback also failed: {fallback_error}")
-            raise Exception(f"Failed to parse JSON from both Bedrock and Claude API. Bedrock response: {response_text}")
-    
-    except Exception as e:
-        print(f"⚠️  Bedrock initialization/request failed: {e}")
-        print("   → Trying Claude API fallback...")
-        
-        try:
-            return extract_farmer_intent_claude_api(farmer_query)
-        except Exception as fallback_error:
-            print(f"❌ Claude API fallback also failed: {fallback_error}")
-            raise Exception(f"Both Bedrock and Claude API failed. Bedrock: {str(e)}, Claude: {fallback_error}")
+            # No mock data fallback - raise exception to indicate service failure
+            raise Exception(f"All AI services failed. Bedrock: {error_message}, Claude API: {fallback_error}")
