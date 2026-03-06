@@ -21,10 +21,14 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     
     # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://postgres:password@localhost:5432/farmfreeze"
-    )
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///farmfreeze.db")
+    
+    # RDS Configuration (for reference/manual use)
+    RDS_USER: str = os.getenv("RDS_USER", "postgres")
+    RDS_PASSWORD: str = os.getenv("RDS_PASSWORD", "")
+    RDS_HOST: str = os.getenv("RDS_HOST", "localhost")
+    RDS_PORT: str = os.getenv("RDS_PORT", "5432")
+    RDS_DB: str = os.getenv("RDS_DB", "farmfreeze")
     
     # AWS Configuration
     AWS_ACCESS_KEY_ID: str = os.getenv("AWS_ACCESS_KEY_ID", "")
@@ -37,6 +41,10 @@ class Settings(BaseSettings):
     # SNS Configuration
     SNS_TOPIC_ARN: str = os.getenv("SNS_TOPIC_ARN", "")
     
+    # Extra Services
+    CLAUDE_API_KEY: str = os.getenv("CLAUDE_API_KEY", "")
+    S3_BUCKET_NAME: str = os.getenv("S3_BUCKET_NAME", "farmfreeze-voice-uploads")
+    
     # Security
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
     ALGORITHM: str = "HS256"
@@ -45,6 +53,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "allow"
 
 
 settings = Settings()
