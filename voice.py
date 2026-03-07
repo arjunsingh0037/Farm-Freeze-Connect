@@ -27,7 +27,7 @@ except ImportError:
 
 class VoiceBooking:
     def __init__(self):
-        self.api_url = "http://localhost:8000/api/voice/enhanced-book"
+        self.api_url = "http://localhost:8001/api/voice/enhanced-book"
         self.farmer_name = "Voice User"
         self.farmer_phone = "+919999999999"
         self.farmer_lat = 28.6139  # Default Delhi
@@ -38,20 +38,34 @@ class VoiceBooking:
     
     def get_real_location(self):
         """Get real-time location based on IP address as a fallback for terminal apps"""
-        try:
-            print("📍 Detecting your real-time location...")
-            response = requests.get('https://ipapi.co/json/', timeout=5)
-            if response.status_code == 200:
-                data = response.json()
-                self.farmer_lat = float(data.get('latitude', 28.6139))
-                self.farmer_lng = float(data.get('longitude', 77.2090))
-                city = data.get('city', 'Unknown')
-                region = data.get('region', 'Unknown')
-                print(f"✅ Location detected: {city}, {region} ({self.farmer_lat}, {self.farmer_lng})")
-            else:
-                print("⚠️  Could not detect real-time location, using default (Delhi).")
-        except Exception as e:
-            print(f"⚠️  Location detection failed: {e}. Using default (Delhi).")
+        # Try multiple geolocation services
+        services = [
+            ('https://ipapi.co/json/', lambda d: (d.get('latitude'), d.get('longitude'), d.get('city'), d.get('region'))),
+            ('https://ip-api.com/json/', lambda d: (d.get('lat'), d.get('lon'), d.get('city'), d.get('regionName'))),
+            ('https://ipinfo.io/json', lambda d: (d.get('loc', ',').split(',')[0], d.get('loc', ',').split(',')[1], d.get('city'), d.get('region')))
+        ]
+        
+        print("📍 Detecting your real-time location...")
+        
+        for service_url, parser in services:
+            try:
+                response = requests.get(service_url, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    lat, lng, city, region = parser(data)
+                    
+                    if lat and lng:
+                        self.farmer_lat = float(lat)
+                        self.farmer_lng = float(lng)
+                        city = city or 'Unknown'
+                        region = region or 'Unknown'
+                        print(f"✅ Location detected: {city}, {region} ({self.farmer_lat}, {self.farmer_lng})")
+                        return
+            except Exception as e:
+                print(f"⚠️  Service {service_url} failed: {e}")
+                continue
+        
+        print("⚠️  Could not detect real-time location, using default (Delhi).")
 
     def record_voice_live(self, duration=10):
         """Record voice in real-time from terminal"""
@@ -201,11 +215,21 @@ class VoiceBooking:
         elif result.get('success') and result.get('booking'):
             b = result['booking']
             print(f"✅ BOOKING SUCCESSFUL!")
-            print(f"   📋 Reference: {b['booking_reference']}")
-            print(f"   🏪 Storage: {b['cold_storage_name']}")
-            print(f"   📦 Quantity: {b['quantity_kg']} kg")
-            print(f"   📅 Date: {b['booking_date']}")
-            print(f"   💰 Cost: ₹{b['total_cost']}")
+            
+            try:
+                # API returns 'quantity' not 'quantity_kg'
+                print(f"   📋 Reference: {b.get('booking_reference', 'N/A')}")
+                print(f"   🏪 Storage: {b.get('cold_storage_name', 'N/A')}")
+                print(f"   📦 Quantity: {b.get('quantity', b.get('quantity_kg', 0))} kg")
+                print(f"   📅 Date: {b.get('booking_date', 'N/A')}")
+                if 'duration_days' in b:
+                    print(f"   ⏱️  Duration: {b['duration_days']} days")
+                print(f"   💰 Cost: ₹{b.get('total_cost', 0):.2f}")
+                if 'distance_km' in b:
+                    print(f"   📍 Distance: {b['distance_km']} km")
+            except Exception as e:
+                print(f"   ⚠️  Error: {e}")
+                print(f"   Debug - Available fields: {list(b.keys())}")
         
         # Failed Booking
         else:
