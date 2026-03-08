@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
@@ -9,23 +9,18 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SQLITE_DB_PATH = os.path.join(BASE_DIR, "farmfreeze.db")
 SQLITE_URL = f"sqlite:///{SQLITE_DB_PATH}"
 
-# RDS URL construction from settings
-RDS_URL = f"postgresql://{settings.RDS_USER}:{settings.RDS_PASSWORD}@{settings.RDS_HOST}:{settings.RDS_PORT}/{settings.RDS_DB}"
-
-# Determine final DATABASE_URL
-# Priority: 1. env DATABASE_URL, 2. RDS (if RDS_HOST is set to something other than localhost), 3. SQLite
-DATABASE_URL = settings.DATABASE_URL
-
 # Function to test database connection
-def test_connection(url):
+def test_connection(url, timeout=5):
+    """Test database connection with timeout"""
     try:
         # Create a throwaway engine with a very short timeout for testing
         temp_engine = create_engine(url, connect_args={"connect_timeout": 3})
         # Try to connect
         with temp_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
             return True
     except Exception as e:
-        print(f"⚠️  Connection check failed for {url.split('@')[-1] if '@' in url else url}: {e}")
+        print(f"⚠️  Connection failed: {str(e)[:100]}")
         return False
 
 # Logic to choose database with fallback
@@ -76,8 +71,10 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def get_db():
+    """Dependency for getting database session"""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
