@@ -26,8 +26,8 @@ env/
 ENV/
 
 # Environment Variables
-.env
-*.env
+# .env
+# *.env
 
 # Database
 *.db
