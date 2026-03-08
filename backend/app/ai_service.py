@@ -51,9 +51,10 @@ def extract_farmer_intent_claude_api(farmer_query: str) -> dict:
  
  Extract ONLY the following fields in JSON: 
  - crop: string 
- - quantity: number 
+ - quantity: number (amount of crop, NOT duration)
  - unit: "kg" or "ton" 
- - time: string 
+ - time: string (when to start: today, tomorrow, etc.)
+ - duration_days: number (how many days to store, extract from phrases like "5 days", "10 days", "एक हफ्ते". If not mentioned, return null)
  - intent: string 
  - urgency: "low" | "medium" | "high" 
  - storage_type: "short-term" | "medium-term" | "long-term" 
@@ -188,9 +189,10 @@ def extract_farmer_intent(farmer_query: str) -> dict:
  
  Extract ONLY the following fields in JSON: 
  - crop: string 
- - quantity: number 
+ - quantity: number (amount of crop, NOT duration)
  - unit: "kg" or "ton" 
- - time: string 
+ - time: string (when to start: today, tomorrow, etc.)
+ - duration_days: number (how many days to store, extract from phrases like "5 days", "10 days", "एक हफ्ते". If not mentioned, return null)
  - intent: string 
  - urgency: "low" | "medium" | "high" 
  - storage_type: "short-term" | "medium-term" | "long-term" 

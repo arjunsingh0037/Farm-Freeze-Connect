@@ -130,16 +130,29 @@ def ai_query(request: AIQueryRequest, db: Session = Depends(get_db)):
             quantity_kg *= 1000
         
         time_str = intent.get("time", "today").lower()
-        if time_str in ["today", "aaj"]:
+        if time_str in ["today", "aaj", "आज"]:
             start_date = date.today()
-        elif time_str in ["tomorrow", "kal"]:
+        elif time_str in ["tomorrow", "kal", "कल", "kal se", "कल से"]:
             start_date = date.today() + timedelta(days=1)
-        else:
+        elif time_str in ["day after tomorrow", "parso", "परसों", "parson"]:
             start_date = date.today() + timedelta(days=2)
+        else:
+            # Default to tomorrow if time is unclear
+            start_date = date.today() + timedelta(days=1)
         
         storage_type = intent.get("storage_type", "short-term")
         duration_map = {"short-term": 7, "medium-term": 30, "long-term": 90}
-        duration_days = duration_map.get(storage_type, 7)
+        
+        # Use duration from voice input if provided, otherwise use default
+        duration_days = intent.get("duration_days")
+        print(f"🔍 DEBUG - AI extracted duration_days: {duration_days}")
+        print(f"🔍 DEBUG - Storage type: {storage_type}")
+        
+        if duration_days is None or duration_days == 0:
+            duration_days = duration_map.get(storage_type, 7)
+            print(f"🔍 DEBUG - Using default duration: {duration_days} days")
+        else:
+            print(f"🔍 DEBUG - Using voice input duration: {duration_days} days")
         
         crop_type = intent.get("crop", "")
         storages = db.query(ColdStorage).all()
@@ -240,16 +253,27 @@ def ai_book(request: AIQueryRequest, db: Session = Depends(get_db)):
             quantity_kg *= 1000
         
         time_str = intent.get("time", "today").lower()
-        if time_str in ["today", "aaj"]:
+        if time_str in ["today", "aaj", "आज"]:
             start_date = date.today()
-        elif time_str in ["tomorrow", "kal"]:
+        elif time_str in ["tomorrow", "kal", "कल", "kal se", "कल से"]:
             start_date = date.today() + timedelta(days=1)
         else:
-            start_date = date.today() + timedelta(days=2)
+            # Default to tomorrow if time is unclear
+            start_date = date.today() + timedelta(days=1)
         
         storage_type = intent.get("storage_type", "short-term")
         duration_map = {"short-term": 7, "medium-term": 30, "long-term": 90}
-        duration_days = duration_map.get(storage_type, 7)
+        
+        # Use duration from voice input if provided, otherwise use default
+        duration_days = intent.get("duration_days")
+        print(f"🔍 DEBUG - AI extracted duration_days: {duration_days}")
+        print(f"🔍 DEBUG - Storage type: {storage_type}")
+        
+        if duration_days is None or duration_days == 0:
+            duration_days = duration_map.get(storage_type, 7)
+            print(f"🔍 DEBUG - Using default duration: {duration_days} days")
+        else:
+            print(f"🔍 DEBUG - Using voice input duration: {duration_days} days")
         
         booking_data = BookingCreate(
             farmer_name=request.farmer_name,
