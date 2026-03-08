@@ -49,11 +49,11 @@ def transcribe_voice(
         raise HTTPException(status_code=500, detail=f"Voice transcription failed: {str(e)}")
 
 @router.post("/query")
-@router.post("/voice-query")
+@router.post("/voice-query", include_in_schema=False)
 def voice_query(
     audio_file: UploadFile = File(...),
-    farmer_lat: float = Form(...),
-    farmer_lng: float = Form(...),
+    farmer_lat: Optional[float] = Form(None),
+    farmer_lng: Optional[float] = Form(None),
     farmer_name: Optional[str] = Form(None),
     farmer_phone: Optional[str] = Form(None),
     language_code: str = Form("hi-IN"),
@@ -67,10 +67,14 @@ def voice_query(
         if transcription_result['status'] != 'completed':
             raise HTTPException(status_code=500, detail="Voice transcription failed")
         
+        # Default to seeded location if missing
+        lat = farmer_lat if farmer_lat is not None else 28.7041
+        lng = farmer_lng if farmer_lng is not None else 77.1025
+        
         ai_request = AIQueryRequest(
             farmer_query=transcription_result['transcript'],
-            farmer_lat=farmer_lat,
-            farmer_lng=farmer_lng,
+            farmer_lat=lat,
+            farmer_lng=lng,
             farmer_name=farmer_name,
             farmer_phone=farmer_phone
         )
@@ -92,96 +96,15 @@ def voice_query(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Voice query processing failed: {str(e)}")
 
-@router.post("/book", response_model=VoiceBookingResponse)
-@router.post("/voice-book", response_model=VoiceBookingResponse)
+@router.post("/book", response_model=SmartVoiceBookingResponse)
+@router.post("/voice-book", response_model=SmartVoiceBookingResponse, include_in_schema=False)
 def voice_book(
     audio_file: UploadFile = File(...),
-    farmer_lat: float = Form(...),
-    farmer_lng: float = Form(...),
-    farmer_name: str = Form(...),
-    farmer_phone: str = Form(...),
+    farmer_lat: Optional[float] = Form(None),
+    farmer_lng: Optional[float] = Form(None),
+    farmer_name: str = Form("Unknown Farmer"),
+    farmer_phone: str = Form("+919999999999"),
     language_code: str = Form("hi-IN"),
-    db: Session = Depends(get_db)
-):
-    """Complete voice-to-booking workflow."""
-    start_time = time.time()
-    
-    try:
-        audio_content = audio_file.file.read()
-        transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
-        
-        if transcription_result['status'] != 'completed':
-            return VoiceBookingResponse(
-                transcription=VoiceTranscriptionResponse(
-                    transcript="", confidence=0.0, alternatives=[],
-                    language_detected=language_code,
-                    processing_time_ms=int((time.time() - start_time) * 1000)
-                ),
-                intent={}, available_storages=[], booking=None,
-                success=False, message="Voice transcription failed"
-            )
-        
-        ai_request = AIQueryRequest(
-            farmer_query=transcription_result['transcript'],
-            farmer_lat=farmer_lat,
-            farmer_lng=farmer_lng,
-            farmer_name=farmer_name,
-            farmer_phone=farmer_phone
-        )
-        
-        booking_result = ai_book_internal(ai_request, db)
-        
-        processing_time = int((time.time() - start_time) * 1000)
-        
-        return VoiceBookingResponse(
-            transcription=VoiceTranscriptionResponse(
-                transcript=transcription_result['transcript'],
-                confidence=transcription_result['confidence'],
-                alternatives=transcription_result.get('alternatives', []),
-                language_detected=language_code,
-                processing_time_ms=processing_time
-            ),
-            intent=booking_result.get("intent", {}),
-            available_storages=[],
-            booking=booking_result.get("booking"),
-            success=booking_result.get("success", False),
-            message=booking_result.get("message", "")
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Voice booking failed: {str(e)}")
-
-@router.post("/test")
-async def test_voice_service():
-    """Test endpoint to verify voice service configuration."""
-    try:
-        mock_audio_path = "test_audio.wav"
-        result = voice_service._get_mock_transcription(mock_audio_path)
-        
-        return {
-            "voice_service_status": "operational",
-            "aws_transcribe_configured": voice_service.transcribe_client is not None,
-            "s3_configured": voice_service.s3_client is not None,
-            "mock_transcription": result,
-            "supported_languages": ["hi-IN", "en-IN", "en-US"],
-            "message": "Voice service is ready. Upload audio files to /api/voice/transcribe"
-        }
-    except Exception as e:
-        return {
-            "voice_service_status": "error",
-            "error": str(e),
-            "message": "Voice service configuration needs attention"
-        }
-
-@router.post("/smart-book", response_model=SmartVoiceBookingResponse)
-def smart_voice_book(
-    audio_file: UploadFile = File(...),
-    farmer_lat: float = Form(...),
-    farmer_lng: float = Form(...),
-    farmer_name: str = "Unknown Farmer",
-    farmer_phone: str = "+919999999999",
-    language_code: str = "hi-IN",
     db: Session = Depends(get_db)
 ):
     """Smart voice booking with missing field detection and voice recommendations."""
@@ -207,16 +130,32 @@ def smart_voice_book(
         farmer_query = transcription_result['transcript']
         intent = extract_farmer_intent(farmer_query)
         
+        # Default to seeded location if missing
+        lat = farmer_lat if farmer_lat is not None else 28.7041
+        lng = farmer_lng if farmer_lng is not None else 77.1025
+        
         missing_fields = []
         if not intent.get("crop") or intent.get("crop") == "unknown":
             missing_fields.append("crop")
         if not intent.get("quantity") or intent.get("quantity") == 0:
             missing_fields.append("quantity")
+        if not intent.get("time") or intent.get("time") == "unknown":
+            missing_fields.append("time")
         
         processing_time = int((time.time() - start_time) * 1000)
         
         if missing_fields:
             recommendation_text = voice_service.generate_missing_field_prompt(missing_fields, language_code)
+            
+            # Generate Audio for the recommendation (Interactive Voice Response)
+            audio_uri = None
+            try:
+                # Generate MP3 using Polly
+                polly_audio = voice_service.generate_voice_recommendation(recommendation_text, language_code)
+                # Store in S3 and get URI
+                audio_uri = voice_service.store_recommendation_audio_s3(polly_audio, language_code)
+            except Exception as e:
+                print(f"⚠️ Voice recommendation generation failed: {e}")
             
             return SmartVoiceBookingResponse(
                 transcription=VoiceTranscriptionResponse(
@@ -230,7 +169,8 @@ def smart_voice_book(
                 recommendation=VoiceRecommendationResponse(
                     missing_fields=missing_fields,
                     recommendation_text=recommendation_text,
-                    audio_available=True,
+                    audio_available=audio_uri is not None,
+                    audio_uri=audio_uri,
                     language_detected=language_code,
                     processing_time_ms=processing_time
                 ),
@@ -240,7 +180,7 @@ def smart_voice_book(
             )
         
         ai_request = AIQueryRequest(
-            farmer_query=farmer_query, farmer_lat=farmer_lat, farmer_lng=farmer_lng,
+            farmer_query=farmer_query, farmer_lat=lat, farmer_lng=lng,
             farmer_name=farmer_name, farmer_phone=farmer_phone
         )
         
@@ -301,162 +241,7 @@ def get_recommendation_audio(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Voice recommendation generation failed: {str(e)}")
 
-@router.post("/enhanced-book", response_model=EnhancedVoiceBookingResponse)
-def enhanced_voice_book(
-    audio_file: UploadFile = File(...),
-    farmer_lat: float = Form(...),
-    farmer_lng: float = Form(...),
-    farmer_name: str = Form("Unknown Farmer"),
-    farmer_phone: str = Form("+919999999999"),
-    language_code: str = Form("hi-IN"),
-    store_in_s3: bool = Form(True),
-    confirmed: bool = Form(False),
-    db: Session = Depends(get_db)
-):
-    """Enhanced voice booking with S3 storage and confirmation flow."""
-    start_time = time.time()
-    
-    try:
-        audio_content = audio_file.file.read()
-        
-        voice_storage_info = None
-        if store_in_s3:
-            farmer_info = {'name': farmer_name, 'phone': farmer_phone}
-            storage_result = voice_service.store_voice_input_s3(audio_content, farmer_info, language_code)
-            voice_storage_info = VoiceStorageResponse(**storage_result)
-        
-        transcription_result = voice_service.transcribe_audio_bytes(audio_content, language_code)
-        if transcription_result['status'] != 'completed':
-            return EnhancedVoiceBookingResponse(
-                transcription=VoiceTranscriptionResponse(
-                    transcript="", confidence=0.0, alternatives=[],
-                    language_detected=language_code,
-                    processing_time_ms=int((time.time() - start_time) * 1000)
-                ),
-                intent={}, missing_fields=["transcription_failed"],
-                recommendation=None, available_storages=[], booking=None,
-                voice_storage=voice_storage_info, success=False,
-                message="Voice transcription failed", requires_more_info=True
-            )
-        
-        farmer_query = transcription_result['transcript']
-        intent = extract_farmer_intent(farmer_query)
-        
-        # Log Interaction
-        interaction = InteractionLog(
-            interaction_type="voice", query_text=farmer_query,
-            extracted_intent=json.dumps(intent),
-            s3_voice_uri=voice_storage_info.s3_uri if voice_storage_info else None,
-            location_lat=farmer_lat, location_lng=farmer_lng
-        )
-        db.add(interaction)
-        db.commit()
-        
-        missing_fields = []
-        if not intent.get("crop") or intent.get("crop") == "unknown":
-            missing_fields.append("crop")
-        if not intent.get("quantity") or intent.get("quantity") == 0:
-            missing_fields.append("quantity")
-        if not intent.get("time") or intent.get("time") == "unknown":
-            missing_fields.append("time")
-        
-        processing_time = int((time.time() - start_time) * 1000)
-        
-        if missing_fields:
-            recommendation_text = voice_service.generate_missing_field_prompt(missing_fields, language_code)
-            audio_uri = None
-            try:
-                polly_audio = voice_service.generate_voice_recommendation(recommendation_text, language_code)
-                audio_uri = voice_service.store_recommendation_audio_s3(polly_audio, language_code)
-            except Exception as polly_err:
-                print(f"Polly generation failed: {polly_err}")
 
-            return EnhancedVoiceBookingResponse(
-                transcription=VoiceTranscriptionResponse(
-                    transcript=transcription_result['transcript'],
-                    confidence=transcription_result['confidence'],
-                    alternatives=transcription_result.get('alternatives', []),
-                    language_detected=language_code,
-                    processing_time_ms=processing_time
-                ),
-                intent=intent, missing_fields=missing_fields,
-                recommendation=VoiceRecommendationResponse(
-                    missing_fields=missing_fields,
-                    recommendation_text=recommendation_text,
-                    audio_available=audio_uri is not None,
-                    audio_uri=audio_uri,
-                    language_detected=language_code,
-                    processing_time_ms=0
-                ),
-                available_storages=[], booking=None,
-                voice_storage=voice_storage_info, success=False,
-                message=f"Missing required information: {', '.join(missing_fields)}",
-                requires_more_info=True
-            )
-        
-        ai_request = AIQueryRequest(
-            farmer_query=farmer_query, farmer_lat=farmer_lat, farmer_lng=farmer_lng,
-            farmer_name=farmer_name, farmer_phone=farmer_phone
-        )
-        
-        search_result = ai_query(ai_request, db)
-        if not search_result.available_storages:
-            return EnhancedVoiceBookingResponse(
-                transcription=VoiceTranscriptionResponse(
-                    transcript=transcription_result['transcript'],
-                    confidence=transcription_result['confidence'],
-                    alternatives=transcription_result.get('alternatives', []),
-                    language_detected=language_code,
-                    processing_time_ms=processing_time
-                ),
-                intent=intent, missing_fields=[], recommendation=None,
-                available_storages=[], booking=None,
-                voice_storage=voice_storage_info, success=False,
-                message="No available cold storage found matching your requirements",
-                requires_more_info=False
-            )
-        
-        if not confirmed:
-            suggestion = search_result.booking_suggestion
-            truck_msg = f"We found shared truck options for your {intent.get('crop', 'produce')} starting from ₹200. "
-            pricing_msg = f"The storage cost will be ₹{suggestion['total_cost']} for {suggestion['duration_days']} days."
-            
-            return EnhancedVoiceBookingResponse(
-                transcription=VoiceTranscriptionResponse(
-                    transcript=transcription_result['transcript'],
-                    confidence=transcription_result['confidence'],
-                    alternatives=transcription_result.get('alternatives', []),
-                    language_detected=language_code,
-                    processing_time_ms=processing_time
-                ),
-                intent=intent, missing_fields=[], recommendation=None,
-                available_storages=search_result.available_storages,
-                booking=suggestion,
-                voice_storage=voice_storage_info, success=True,
-                message=f"{pricing_msg} {truck_msg} Please confirm if you agree to book.",
-                requires_more_info=False
-            )
-
-        booking_result = ai_book_internal(ai_request, db)
-        
-        return EnhancedVoiceBookingResponse(
-            transcription=VoiceTranscriptionResponse(
-                transcript=transcription_result['transcript'],
-                confidence=transcription_result['confidence'],
-                alternatives=transcription_result.get('alternatives', []),
-                language_detected=language_code,
-                processing_time_ms=processing_time
-            ),
-            intent=intent, missing_fields=[], recommendation=None,
-            available_storages=search_result.available_storages,
-            booking=booking_result.get('booking'),
-            voice_storage=voice_storage_info,
-            success=booking_result.get('success', False),
-            message=booking_result.get('message', ''),
-            requires_more_info=False
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/stored-inputs", response_model=VoiceInputListResponse)
 def list_voice_inputs(

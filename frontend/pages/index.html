@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FarmFreeze - Voice Booking</title>
-    <link rel="stylesheet" href="../css/styles-common.css">
+    <link rel="stylesheet" href="/css/styles-common.css">
 </head>
 <body>
     <!-- Navigation -->
@@ -158,7 +158,7 @@
     </style>
 
     <script>
-        const API_URL = 'http://localhost:8001/api/v1';
+        const API_URL = 'http://localhost:8000/api/v1';
         let mediaRecorder, audioChunks = [], recordingTimer, seconds = 0;
         const INVALID_CROPS = ['it', 'this', 'that', 'something', 'anything', 'storage', 'cold'];
 
@@ -256,7 +256,7 @@
             formData.append('language_code', 'hi-IN');
 
             try {
-                const res = await fetch(`${API_URL}/voice/enhanced-book`, {
+                const res = await fetch(`${API_URL}/voice/book`, {
                     method: 'POST',
                     body: formData
                 });

@@ -19,7 +19,9 @@ DATABASE_URL = settings.DATABASE_URL
 # Function to test database connection
 def test_connection(url):
     try:
+        # Create a throwaway engine with a very short timeout for testing
         temp_engine = create_engine(url, connect_args={"connect_timeout": 3})
+        # Try to connect
         with temp_engine.connect() as conn:
             return True
     except Exception as e:
@@ -27,31 +29,49 @@ def test_connection(url):
         return False
 
 # Logic to choose database with fallback
-if not DATABASE_URL or DATABASE_URL == "sqlite:///farmfreeze.db":
-    # If RDS_HOST is not localhost, it means we have a remote RDS configured
-    if settings.RDS_HOST != "localhost" or settings.RDS_PASSWORD:
-        print(f"🔄 Attempting to connect to RDS at {settings.RDS_HOST}...")
-        if test_connection(RDS_URL):
-            DATABASE_URL = RDS_URL
-            print(f"✅ Successfully connected to RDS Database at {settings.RDS_HOST}")
-        else:
-            DATABASE_URL = SQLITE_URL
-            print(f"❌ RDS Unreachable. Falling back to local SQLite: {SQLITE_DB_PATH}")
+DATABASE_URL = settings.DATABASE_URL or ""
+
+# If we have RDS credentials and DATABASE_URL isn't explicitly local, try to use them first
+if settings.RDS_HOST and settings.RDS_HOST != "localhost" and "sqlite" not in str(DATABASE_URL):
+    print(f"🔄 Attempting to connect to RDS at {settings.RDS_HOST}...")
+    if test_connection(RDS_URL):
+        DATABASE_URL = RDS_URL
+        print(f"✅ Successfully connected to RDS Database at {settings.RDS_HOST}")
     else:
+        # Fallback to local SQLite
         DATABASE_URL = SQLITE_URL
-        print(f"📦 Using local SQLite fallback: {SQLITE_DB_PATH}")
+        print(f"❌ RDS Unreachable. Falling back to local SQLite: {SQLITE_DB_PATH}")
+elif "sqlite" in str(DATABASE_URL):
+    # Explicitly requested SQLite
+    DATABASE_URL = SQLITE_URL
+    print(f"📦 Explicit SQLite requested: {SQLITE_DB_PATH}")
 else:
-    print(f"🔗 Using explicit DATABASE_URL: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
+    # No RDS configured, default to SQLite
+    DATABASE_URL = SQLITE_URL
+    print(f"📦 No RDS configured. Using local SQLite: {SQLITE_DB_PATH}")
 
 # SQLAlchemy Engine Configuration
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+    # SQLite doesn't need pool configuration as much, but can benefit from static pool for in-memory
+    engine = create_engine(
+        DATABASE_URL, 
+        connect_args=connect_args,
+        pool_pre_ping=True
+    )
 else:
-    # Set connection timeout for RDS (PostgreSQL) to fail faster
-    connect_args = {"connect_timeout": 10}
-
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+    # PostgreSQL / RDS Configuration
+    connect_args = {"connect_timeout": 5} # Fail fast on connection
+    engine = create_engine(
+        DATABASE_URL, 
+        connect_args=connect_args,
+        pool_size=5,             # Limit pool size to avoid exhaustion
+        max_overflow=10,         # Allow some overflow
+        pool_timeout=10,         # Wait max 10s for a connection
+        pool_recycle=1800,       # Recycle connections every 30 mins
+        pool_pre_ping=True       # Check connection health before using
+    )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

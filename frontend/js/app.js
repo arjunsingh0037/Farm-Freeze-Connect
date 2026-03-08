@@ -1,5 +1,5 @@
 // Configuration
-const API_BASE_URL = 'http://localhost:8001/api/v1';
+const API_BASE_URL = 'http://localhost:8000/api/v1';
 
 // Check if page loaded successfully
 console.log('✅ FarmFreeze Connect JavaScript loaded successfully');
@@ -135,7 +135,7 @@ async function processVoiceBooking(audioBlob) {
     formData.append('language_code', 'hi-IN');
 
     try {
-        const response = await fetch(`${API_BASE_URL}/voice/enhanced-book`, {
+        const response = await fetch(`${API_BASE_URL}/voice/book`, {
             method: 'POST',
             body: formData
         });

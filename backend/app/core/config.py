@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///farmfreeze.db")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
     
     # RDS Configuration (for reference/manual use)
     RDS_USER: str = os.getenv("RDS_USER", "postgres")
