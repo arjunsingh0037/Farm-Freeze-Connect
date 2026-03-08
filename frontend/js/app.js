@@ -1,5 +1,5 @@
 // Configuration
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = (typeof window !== 'undefined' && window.location ? window.location.origin : '') + '/api/v1';
 
 // Check if page loaded successfully
 console.log('✅ FarmFreeze Connect JavaScript loaded successfully');

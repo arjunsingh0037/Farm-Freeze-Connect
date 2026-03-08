@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -128,59 +129,59 @@
                 align-items: flex-start;
                 gap: 15px;
             }
-            
+
             .bookings-header h2 {
                 font-size: 26px;
             }
-            
+
             .stats-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
-            
+
             .stat-value {
                 font-size: 28px;
             }
-            
+
             .stat-label {
                 font-size: 12px;
             }
-            
+
             .booking-card {
                 padding: 20px;
             }
-            
+
             .booking-ref {
                 font-size: 18px;
             }
         }
-        
+
         @media (max-width: 480px) {
             .bookings-card {
                 padding: 20px;
                 border-radius: 16px;
             }
-            
+
             .bookings-header h2 {
                 font-size: 22px;
             }
-            
+
             .stats-grid {
                 grid-template-columns: 1fr;
                 gap: 15px;
             }
-            
+
             .stat-card {
                 padding: 20px;
             }
-            
+
             .booking-card {
                 padding: 15px;
             }
-            
+
             .booking-ref {
                 font-size: 16px;
             }
-            
+
             .status-badge {
                 font-size: 11px;
                 padding: 6px 12px;
@@ -188,6 +189,7 @@
         }
     </style>
 </head>
+
 <body>
     <!-- Navigation -->
     <nav class="navbar">
@@ -235,7 +237,7 @@
     </div>
 
     <script>
-        const API_URL = 'http://localhost:8000/api/v1';
+        const API_URL = (window.location.origin || '') + '/api/v1';
 
         function showLoading() {
             document.getElementById('loadingOverlay').classList.add('show');
@@ -251,7 +253,7 @@
             try {
                 const res = await fetch(`${API_URL}/bookings`);
                 if (!res.ok) throw new Error('Failed to load bookings');
-                
+
                 const bookings = await res.json();
                 displayBookings(bookings);
             } catch (err) {
@@ -335,7 +337,7 @@
                             </div>
                             <div style="text-align: center; padding: 12px; background: white; border-radius: 8px;">
                                 <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-bottom: 5px;">Date</div>
-                                <div style="font-size: 18px; font-weight: 700; color: #667eea;">${new Date(b.booking_date).toLocaleDateString('en-GB', {day: '2-digit', month: 'short'})}</div>
+                                <div style="font-size: 18px; font-weight: 700; color: #667eea;">${new Date(b.booking_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>
                             </div>
                             <div style="text-align: center; padding: 12px; background: white; border-radius: 8px;">
                                 <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-bottom: 5px;">Duration</div>
@@ -360,4 +362,5 @@
         console.log('✅ FarmFreeze Bookings Page Ready');
     </script>
 </body>
+
 </html>

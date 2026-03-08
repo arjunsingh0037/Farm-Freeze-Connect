@@ -158,7 +158,7 @@
     </style>
 
     <script>
-        const API_URL = 'http://localhost:8000/api/v1';
+       const API_URL = (window.location.origin || '') + '/api/v1';
         let mediaRecorder, audioChunks = [], recordingTimer, seconds = 0;
         const INVALID_CROPS = ['it', 'this', 'that', 'something', 'anything', 'storage', 'cold'];
 
