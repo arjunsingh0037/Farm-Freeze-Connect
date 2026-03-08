@@ -13,13 +13,9 @@ SQLITE_URL = f"sqlite:///{SQLITE_DB_PATH}"
 def test_connection(url, timeout=5):
     """Test database connection with timeout"""
     try:
-        connect_args = {}
-        if url.startswith("sqlite"):
-            connect_args = {"check_same_thread": False}
-        else:
-            connect_args = {"connect_timeout": timeout}
-        
-        temp_engine = create_engine(url, connect_args=connect_args)
+        # Create a throwaway engine with a very short timeout for testing
+        temp_engine = create_engine(url, connect_args={"connect_timeout": 3})
+        # Try to connect
         with temp_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
             return True
@@ -27,62 +23,50 @@ def test_connection(url, timeout=5):
         print(f"⚠️  Connection failed: {str(e)[:100]}")
         return False
 
-# Determine DATABASE_URL with RDS primary and SQLite fallback
-DATABASE_URL = None
-DB_TYPE = "unknown"
+# Logic to choose database with fallback
+DATABASE_URL = settings.DATABASE_URL or ""
 
-# Check if RDS credentials are configured
-rds_configured = (
-    settings.RDS_HOST and 
-    settings.RDS_HOST != "localhost" and 
-    settings.RDS_PASSWORD
-)
-
-if rds_configured:
-    # Try RDS first
-    RDS_URL = f"postgresql://{settings.RDS_USER}:{settings.RDS_PASSWORD}@{settings.RDS_HOST}:{settings.RDS_PORT}/{settings.RDS_DB}"
-    print(f"🔄 Attempting to connect to RDS PostgreSQL at {settings.RDS_HOST}...")
-    
-    if test_connection(RDS_URL, timeout=5):
+# If we have RDS credentials and DATABASE_URL isn't explicitly local, try to use them first
+if settings.RDS_HOST and settings.RDS_HOST != "localhost" and "sqlite" not in str(DATABASE_URL):
+    print(f"🔄 Attempting to connect to RDS at {settings.RDS_HOST}...")
+    if test_connection(RDS_URL):
         DATABASE_URL = RDS_URL
-        DB_TYPE = "RDS PostgreSQL"
-        print(f"✅ Successfully connected to RDS PostgreSQL")
-        print(f"   Host: {settings.RDS_HOST}")
-        print(f"   Database: {settings.RDS_DB}")
+        print(f"✅ Successfully connected to RDS Database at {settings.RDS_HOST}")
     else:
-        print(f"❌ RDS connection failed. Falling back to SQLite...")
+        # Fallback to local SQLite
         DATABASE_URL = SQLITE_URL
-        DB_TYPE = "SQLite (Fallback)"
-else:
-    # Use SQLite if RDS not configured
+        print(f"❌ RDS Unreachable. Falling back to local SQLite: {SQLITE_DB_PATH}")
+elif "sqlite" in str(DATABASE_URL):
+    # Explicitly requested SQLite
     DATABASE_URL = SQLITE_URL
-    DB_TYPE = "SQLite (Default)"
-    print(f"📦 RDS not configured. Using SQLite database.")
-
-print(f"🗄️  Active Database: {DB_TYPE}")
-if DATABASE_URL.startswith("sqlite"):
-    print(f"   Path: {SQLITE_DB_PATH}")
+    print(f"📦 Explicit SQLite requested: {SQLITE_DB_PATH}")
+else:
+    # No RDS configured, default to SQLite
+    DATABASE_URL = SQLITE_URL
+    print(f"📦 No RDS configured. Using local SQLite: {SQLITE_DB_PATH}")
 
 # SQLAlchemy Engine Configuration
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+    # SQLite doesn't need pool configuration as much, but can benefit from static pool for in-memory
+    engine = create_engine(
+        DATABASE_URL, 
+        connect_args=connect_args,
+        pool_pre_ping=True
+    )
 else:
-    # PostgreSQL connection settings
-    connect_args = {
-        "connect_timeout": 10,
-        "options": "-c timezone=utc"
-    }
-
-# Create engine with appropriate settings
-engine = create_engine(
-    DATABASE_URL, 
-    connect_args=connect_args,
-    pool_pre_ping=True,  # Verify connections before using
-    pool_recycle=3600,   # Recycle connections after 1 hour
-    echo=False           # Set to True for SQL query logging
-)
-
+    # PostgreSQL / RDS Configuration
+    connect_args = {"connect_timeout": 5} # Fail fast on connection
+    engine = create_engine(
+        DATABASE_URL, 
+        connect_args=connect_args,
+        pool_size=5,             # Limit pool size to avoid exhaustion
+        max_overflow=10,         # Allow some overflow
+        pool_timeout=10,         # Wait max 10s for a connection
+        pool_recycle=1800,       # Recycle connections every 30 mins
+        pool_pre_ping=True       # Check connection health before using
+    )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

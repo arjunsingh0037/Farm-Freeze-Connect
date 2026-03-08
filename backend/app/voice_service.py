@@ -275,8 +275,16 @@ class VoiceService:
             temp_file_path = temp_file.name
         
         try:
-            result = self.transcribe_audio_file(temp_file_path, language_code)
-            return result
+            # Try actual transcription if client is available
+            if self.transcribe_client:
+                try:
+                    return self.transcribe_audio_file(temp_file_path, language_code)
+                except Exception as e:
+                    print(f"⚠️  Amazon Transcribe failed: {e}")
+                    raise e
+            else:
+                raise Exception("Amazon Transcribe client not initialized. Check your credentials.")
+                
         finally:
             # Cleanup temporary file
             try:
@@ -334,36 +342,47 @@ class VoiceService:
             Prompt text in the specified language
         """
         if language_code.startswith("hi"):
-            # Hindi prompts
+            # Hindi prompts (Interactive & Natural)
             field_prompts = {
-                "crop": "आप कौन सी फसल स्टोर करना चाहते हैं?",
-                "quantity": "आप कितनी मात्रा में स्टोर करना चाहते हैं?",
-                "time": "आप कब से स्टोरेज शुरू करना चाहते हैं?",
-                "location": "आपका स्थान क्या है?",
-                "duration": "आप कितने दिनों के लिए स्टोर करना चाहते हैं?"
+                "crop": "आप कौन सी फसल या सब्जी स्टोर करना चाहते हैं? जैसे कि आलू, प्याज या टमाटर।",
+                "quantity": "आप कितनी मात्रा स्टोर करना चाहते हैं? कृपया किलो या टन में बताएं।",
+                "time": "आप कोल्ड स्टोरेज में सामान कब रखना चाहते हैं? आज, कल या किसी और दिन?",
+                "duration": "आप कितने दिनों के लिए स्टोरेज चाहते हैं?"
             }
             
-            if len(missing_fields) == 1:
-                return f"कृपया बताएं, {field_prompts.get(missing_fields[0], 'अधिक जानकारी दें।')}"
+            # Filter out location from missing fields if present
+            filtered_missing = [f for f in missing_fields if f != 'location']
+            
+            if not filtered_missing:
+                return ""
+            
+            if len(filtered_missing) == 1:
+                return f"नमस्ते, बुकिंग पूरी करने के लिए एक जानकारी और चाहिए। {field_prompts.get(filtered_missing[0], 'कृपया अधिक जानकारी दें।')}"
             else:
-                missing_text = ", ".join([field_prompts.get(f, f) for f in missing_fields])
-                return f"कृपया निम्नलिखित जानकारी दें: {missing_text}"
+                # Prioritize the first missing field for better interaction flow
+                first_missing = filtered_missing[0]
+                return f"नमस्ते किसान भाई, आपकी बुकिंग के लिए कुछ जानकारी अधूरी है। {field_prompts.get(first_missing, '')} कृपया बोलकर जवाब दें।"
         
         else:
-            # English prompts
+            # English prompts (Interactive & Natural)
             field_prompts = {
-                "crop": "which crop you want to store?",
-                "quantity": "how much quantity you want to store?",
-                "time": "when you want to start storage?",
-                "location": "your location?",
-                "duration": "for how many days you want to store?"
+                "crop": "which crop or vegetable would you like to store? For example, potato, onion, or tomato.",
+                "quantity": "how much quantity do you want to store? Please mention in kg or tons.",
+                "time": "when would you like to start the storage? Today, tomorrow, or a specific date?",
+                "duration": "for how many days do you want to store your produce?"
             }
             
-            if len(missing_fields) == 1:
-                return f"Please tell me, {field_prompts.get(missing_fields[0], 'provide more information.')}"
+            # Filter out location from missing fields if present
+            filtered_missing = [f for f in missing_fields if f != 'location']
+            
+            if not filtered_missing:
+                return ""
+            
+            if len(filtered_missing) == 1:
+                return f"Hello, to complete your booking, I need one more detail. {field_prompts.get(filtered_missing[0], 'Please provide more information.')}"
             else:
-                missing_text = ", ".join([field_prompts.get(f, f) for f in missing_fields])
-                return f"Please provide the following information: {missing_text}"
+                first_missing = filtered_missing[0]
+                return f"Hello, some details are missing for your booking. {field_prompts.get(first_missing, '')} Please speak your answer."
 
     def store_voice_input_s3(self, audio_bytes: bytes, farmer_info: dict, language_code: str = "hi-IN") -> dict:
         """

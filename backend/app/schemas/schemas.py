@@ -51,6 +51,19 @@ class BookingCreate(BaseModel):
     duration_days: int = 1
     crop_type: Optional[str] = None
 
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "farmer_name": "Ramesh Kumar",
+                "farmer_phone": "+919876543210",
+                "cold_storage_id": 1,
+                "quantity_kg": 500.0,
+                "booking_date": "2024-03-10",
+                "duration_days": 7,
+                "crop_type": "potato"
+            }
+        }
+
 class BookingResponse(BaseModel):
     id: int
     booking_reference: str
@@ -102,6 +115,17 @@ class AIQueryRequest(BaseModel):
     farmer_lng: float
     farmer_name: Optional[str] = None
     farmer_phone: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "farmer_query": "I want to store 500kg potato",
+                "farmer_lat": 28.7041,
+                "farmer_lng": 77.1025,
+                "farmer_name": "Ramesh Kumar",
+                "farmer_phone": "+919876543210"
+            }
+        }
 
 class AIQueryResponse(BaseModel):
     intent: dict
@@ -188,6 +212,15 @@ class TextQueryRequest(BaseModel):
     query: str
     lat: float
     lng: float
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query": "I want to store 500kg potato",
+                "lat": 28.7041,
+                "lng": 77.1025
+            }
+        }
 
 class StorageResult(BaseModel):
     id: str
